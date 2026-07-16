@@ -36,7 +36,7 @@
     // method: area (Strike) | diagonal (Breach) | forward (Artillery)
     offensive: [
       { id: "strike", label: "Strike", symbol: "🗡️", power: 4, multiplier: 1, method: "area", range: 2 },
-      { id: "breach", label: "Breach", symbol: "💥", power: 5, multiplier: 0.45, method: "diagonal" },
+      { id: "breach", label: "Breach", symbol: "💥", power: 5, multiplier: 0.55, method: "diagonal" },
       { id: "artillery", label: "Artillery", symbol: "🚀", power: 2, multiplier: 0.9, method: "forward" },
     ],
     defensive: [
