@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hierarchy Idle</title>
+  <link href="style.css" rel="stylesheet">
+</head>
+<body>
+  <header class="header">
+    <h1>Hierarchy Idle</h1>
+    <div class="header-stats">
+      <div class="tokens">
+        <span class="token-icon">⬡</span>
+        <span id="token-count">0</span>
+        <span class="rate" id="token-rate">+1.00 /s</span>
+      </div>
+      <div class="upgrade-points">
+        <span class="upgrade-icon">✦</span>
+        <span id="upgrade-count">0</span>
+        <span class="star-detail" id="inactive-star-count">+0 locked</span>
+      </div>
+      <div class="shards">
+        <span class="shard-icon">◆</span>
+        <span id="shard-count">10</span>
+        <span class="upgrade-label">Shards</span>
+      </div>
+      <div class="achievement-bonus">
+        <span class="achievement-icon">🏆</span>
+        <span id="header-achievement-mult">×1.0</span>
+        <span class="upgrade-label">Minerals</span>
+      </div>
+    </div>
+  </header>
+
+  <div id="offline-banner" class="offline-banner" hidden></div>
+
+  <main id="game"></main>
+  <section id="upgrades" class="upgrades-panel">
+    <h2 class="panel-title">Production Upgrades</h2>
+    <div id="prestige-row" class="box-row prestige-row">
+      <div class="box-info">
+        <h3>Prestige</h3>
+        <p class="box-desc"></p>
+      </div>
+      <div class="prestige-actions">
+        <button type="button" class="box-buy claim-stars-btn" data-action="claim-stars"></button>
+        <button type="button" class="box-buy prestige-btn" data-action="prestige"></button>
+      </div>
+    </div>
+    <div id="upgrade-list"></div>
+  </section>
+  <section id="boxes" class="boxes-panel">
+    <h2 class="panel-title">Resource Boxes</h2>
+    <p class="panel-desc">Claim daily Shards and spend them on instant production.</p>
+    <div id="daily-claim-row" class="box-row daily-claim-row">
+      <div class="box-info">
+        <h3>Daily Shards</h3>
+        <p class="box-desc"></p>
+      </div>
+      <button type="button" id="daily-claim-btn" class="box-buy daily-claim-btn"></button>
+    </div>
+    <div id="box-list"></div>
+  </section>
+  <section id="achievements" class="achievements-panel">
+    <h2 class="panel-title">Achievements</h2>
+    <p class="panel-desc">Complete goals, then claim rewards to boost mineral production and earn shards.</p>
+    <div id="achievement-list"></div>
+    <div class="achievement-progress" id="achievement-progress">
+      <div class="achievement-progress-header">
+        <span class="achievement-progress-title">🏆 Achievement Points</span>
+        <span id="achievement-progress-text" class="achievement-progress-text"></span>
+      </div>
+      <div class="achievement-progress-track">
+        <div id="achievement-progress-claimed" class="achievement-progress-fill claimed"></div>
+        <div id="achievement-progress-ready" class="achievement-progress-fill ready"></div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <button id="save-btn" type="button">Save</button>
+    <button id="reset-btn" type="button" class="danger">Reset</button>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
