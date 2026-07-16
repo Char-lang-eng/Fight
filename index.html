@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FRONTLINE — Territory War</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="atmosphere" aria-hidden="true"></div>
+
+  <div id="start-screen" class="overlay">
+    <div class="overlay-card">
+      <p class="overlay-brand">FRONTLINE</p>
+      <p class="overlay-lead">Take the enemy back row to win</p>
+
+      <div class="name-fields">
+        <label class="name-field name-ember">
+          <span>Red team</span>
+          <input id="input-ember-name" type="text" maxlength="16" value="Ember" autocomplete="off" />
+        </label>
+        <label class="name-field name-tide">
+          <span>Blue team</span>
+          <input id="input-tide-name" type="text" maxlength="16" value="Tide" autocomplete="off" />
+        </label>
+      </div>
+
+      <button type="button" id="btn-start" class="btn btn-start">Start war</button>
+    </div>
+  </div>
+
+  <div id="gameover-screen" class="overlay hidden" aria-hidden="true">
+    <div class="overlay-card">
+      <p class="overlay-brand">Game over</p>
+      <p id="gameover-message" class="overlay-lead">Victory</p>
+      <button type="button" id="btn-dismiss" class="btn btn-start">Dismiss</button>
+    </div>
+  </div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">FRONTLINE</span>
+      <span class="brand-sub">take the enemy back row to win</span>
+    </div>
+    <div class="controls">
+      <button type="button" id="btn-pause" class="btn" disabled>Pause</button>
+      <button type="button" id="btn-reset" class="btn btn-ghost">Reset</button>
+    </div>
+  </header>
+
+  <main class="stage">
+    <aside class="hud hud-ember">
+      <p class="hud-team" id="ember-name-label">Ember</p>
+      <p class="hud-stat"><span id="ember-cells">0</span> cells</p>
+      <ul class="hud-log" id="ember-log" aria-live="polite"></ul>
+    </aside>
+
+    <section class="battlefield-wrap">
+      <div class="battlefield" id="battlefield" role="img" aria-label="Territory war grid"></div>
+      <div class="legend">
+        <span class="legend-item"><i class="swatch ember"></i> <span id="ember-goal-label">Ember wants right edge</span></span>
+        <span class="legend-item"><i class="swatch tide"></i> <span id="tide-goal-label">Tide wants left edge</span></span>
+        <span class="legend-item" id="attack-turn-label">Attack turn: Ember</span>
+      </div>
+    </section>
+
+    <aside class="hud hud-tide">
+      <p class="hud-team" id="tide-name-label">Tide</p>
+      <p class="hud-stat"><span id="tide-cells">0</span> cells</p>
+      <ul class="hud-log" id="tide-log" aria-live="polite"></ul>
+    </aside>
+
+    <aside class="unit-key" aria-label="Unit key">
+      <h2 class="unit-key-title">Unit key</h2>
+      <div class="unit-key-cols">
+        <div class="unit-key-group">
+          <h3>Offensive</h3>
+          <ul>
+            <li>
+              <span class="unit-emoji" aria-hidden="true">🗡️</span>
+              <div>
+                <strong>Strike</strong>
+                <p>Attacks 1 enemy square within range 2. Power 2, mult 0.75 — prefers closer targets.</p>
+              </div>
+            </li>
+            <li>
+              <span class="unit-emoji" aria-hidden="true">💥</span>
+              <div>
+                <strong>Breach</strong>
+                <p>Diagonal shots only. Power 4, mult 0.55 — angled breakthroughs through armour.</p>
+              </div>
+            </li>
+            <li>
+              <span class="unit-emoji" aria-hidden="true">🚀</span>
+              <div>
+                <strong>Artillery</strong>
+                <p>Fires straight toward the enemy end only. Power 3, mult 0.9 — long horizontal pushes.</p>
+              </div>
+            </li>
+          </ul>
+        </div>
+        <div class="unit-key-group">
+          <h3>Defensive</h3>
+          <ul>
+            <li>
+              <span class="unit-emoji" aria-hidden="true">🧱</span>
+              <div>
+                <strong>Barricade</strong>
+                <p>Light wall. Armor 18 — slows attacks but breaks under sustained fire.</p>
+              </div>
+            </li>
+            <li>
+              <span class="unit-emoji" aria-hidden="true">🛡️</span>
+              <div>
+                <strong>Bunker</strong>
+                <p>Strong wall. Armor 32 — soaks many hits before the cell can fall.</p>
+              </div>
+            </li>
+            <li>
+              <span class="unit-emoji" aria-hidden="true">🏰</span>
+              <div>
+                <strong>Fortify</strong>
+                <p>Heaviest wall. Armor 48 — the toughest hold on the board.</p>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </div>
+      <p class="unit-key-note">Strike hits one enemy within range 2. Breach fires diagonally. Artillery fires straight toward the enemy end only. Ray attacks travel through own colour then push while power remains — capture costs 1 from remaining power, then the multiplier applies again before the next square. Armour also spends remaining power. Teams attack on alternating turns.</p>
+    </aside>
+  </main>
+
+  <footer class="status-bar">
+    <span id="status-text">Name your teams, then start the war</span>
+    <span id="placement-count">0 placements</span>
+  </footer>
+
+  <script src="game.js"></script>
+</body>
+</html>
