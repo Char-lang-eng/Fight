@@ -13,7 +13,7 @@
   <div class="atmosphere" aria-hidden="true"></div>
 
   <div id="start-screen" class="overlay">
-    <div class="overlay-card">
+    <div class="overlay-card overlay-card-start">
       <p class="overlay-brand">FRONTLINE</p>
       <p class="overlay-lead">Take the enemy back row to win</p>
 
@@ -26,6 +26,31 @@
           <span>Blue team</span>
           <input id="input-tide-name" type="text" maxlength="16" value="Tide" autocomplete="off" />
         </label>
+      </div>
+
+      <div class="budget-row">
+        <label class="budget-field" for="input-budget">
+          <span>Loadout points (each team)</span>
+          <input id="input-budget" type="number" min="0" max="40" step="1" value="10" />
+        </label>
+        <p class="budget-hint">Each purchase costs points and adds +1% spawn chance for that unit.</p>
+      </div>
+
+      <div class="loadout-boards" id="loadout-boards">
+        <section class="loadout-board loadout-ember" data-team="ember">
+          <header class="loadout-header">
+            <h2 id="loadout-ember-title">Ember</h2>
+            <p class="loadout-spent" id="ember-points-left">10 pts · 100% empty</p>
+          </header>
+          <div class="loadout-rows" id="ember-loadout"></div>
+        </section>
+        <section class="loadout-board loadout-tide" data-team="tide">
+          <header class="loadout-header">
+            <h2 id="loadout-tide-title">Tide</h2>
+            <p class="loadout-spent" id="tide-points-left">10 pts · 100% empty</p>
+          </header>
+          <div class="loadout-rows" id="tide-loadout"></div>
+        </section>
       </div>
 
       <button type="button" id="btn-start" class="btn btn-start">Start war</button>
@@ -43,7 +68,7 @@
   <header class="topbar">
     <div class="brand">
       <span class="brand-mark">FRONTLINE</span>
-      <span class="brand-sub">take the enemy back row to win</span>
+      <span class="brand-sub">Can you survive the war?</span>
     </div>
     <div class="controls">
       <button type="button" id="btn-pause" class="btn" disabled>Pause</button>
@@ -55,7 +80,8 @@
     <aside class="hud hud-ember">
       <p class="hud-team" id="ember-name-label">Ember</p>
       <p class="hud-stat"><span id="ember-cells">0</span> cells</p>
-      <ul class="hud-log" id="ember-log" aria-live="polite"></ul>
+      <p class="hud-loadout-title">Loadout</p>
+      <ul class="hud-loadout" id="ember-hud-loadout"></ul>
     </aside>
 
     <section class="battlefield-wrap">
@@ -70,7 +96,8 @@
     <aside class="hud hud-tide">
       <p class="hud-team" id="tide-name-label">Tide</p>
       <p class="hud-stat"><span id="tide-cells">0</span> cells</p>
-      <ul class="hud-log" id="tide-log" aria-live="polite"></ul>
+      <p class="hud-loadout-title">Loadout</p>
+      <ul class="hud-loadout" id="tide-hud-loadout"></ul>
     </aside>
 
     <aside class="unit-key" aria-label="Unit key">
@@ -83,21 +110,28 @@
               <span class="unit-emoji" aria-hidden="true">🗡️</span>
               <div>
                 <strong>Strike</strong>
-                <p>Attacks 1 enemy square within range 2. Power 2, mult 0.75 — prefers closer targets.</p>
+                <p>Attacks 1 enemy square within range 2. Power 4 — prefers closer targets.</p>
               </div>
             </li>
             <li>
               <span class="unit-emoji" aria-hidden="true">💥</span>
               <div>
                 <strong>Breach</strong>
-                <p>Diagonal shots only. Power 4, mult 0.55 — angled breakthroughs through armour.</p>
+                <p>Diagonal shots only. Power 3-12, mult 0.45 — angled breakthroughs through armour.</p>
               </div>
             </li>
             <li>
               <span class="unit-emoji" aria-hidden="true">🚀</span>
               <div>
                 <strong>Artillery</strong>
-                <p>Fires straight toward the enemy end only. Power 3, mult 0.9 — long horizontal pushes.</p>
+                <p>Fires straight toward the enemy end only. Power 1-4, mult 0.8 — captures at most 1 tile per shot.</p>
+              </div>
+            </li>
+            <li>
+              <span class="unit-emoji" aria-hidden="true">🎯</span>
+              <div>
+                <strong>Saboteur</strong>
+                <p>Fires straight like Artillery, but skips empty land and only destroys enemy units — never captures. Power 5, mult 1. Unlocks after 10 minutes.</p>
               </div>
             </li>
           </ul>
@@ -109,7 +143,7 @@
               <span class="unit-emoji" aria-hidden="true">🧱</span>
               <div>
                 <strong>Barricade</strong>
-                <p>Light wall. Armor 18 — slows attacks but breaks under sustained fire.</p>
+                <p>Light wall. Armor 10 — slows attacks but breaks under sustained fire.</p>
               </div>
             </li>
             <li>
@@ -123,18 +157,18 @@
               <span class="unit-emoji" aria-hidden="true">🏰</span>
               <div>
                 <strong>Fortify</strong>
-                <p>Heaviest wall. Armor 48 — the toughest hold on the board.</p>
+                <p>Heaviest wall. Armor 64 — the toughest hold on the board.</p>
               </div>
             </li>
           </ul>
         </div>
       </div>
-      <p class="unit-key-note">Strike hits one enemy within range 2. Breach fires diagonally. Artillery fires straight toward the enemy end only. Ray attacks travel through own colour then push while power remains — capture costs 1 from remaining power, then the multiplier applies again before the next square. Armour also spends remaining power. Teams attack on alternating turns.</p>
     </aside>
   </main>
 
   <footer class="status-bar">
-    <span id="status-text">Name your teams, then start the war</span>
+    <span id="status-text">Name teams, set loadouts, then start the war</span>
+    <span id="match-timer" class="match-timer">20:00</span>
     <span id="placement-count">0 placements</span>
   </footer>
 
