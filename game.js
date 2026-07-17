@@ -3,17 +3,21 @@
   const ROWS = 12;
   const MOVE_MS = 400;
   const ATTACK_MS = 1800;
-  const PLACE_CHANCE = 0.2;
   /** How many cells of the enemy back row you need to own to win */
   const BACK_ROW_TO_WIN = 1;
   /** For this long after kickoff, cursors cannot overwrite occupied tiles */
   const NO_OVERWRITE_MS = 60_000;
+  /** Match length; most units on the board wins when time runs out */
+  const MATCH_DURATION_MS = 20 * 60 * 1000;
+  /** Extra time when regulation ends tied on units */
+  const OVERTIME_DURATION_MS = 5 * 60 * 1000;
+  /** Saboteur cannot spawn until this much match time has elapsed */
+  const SABOTEUR_UNLOCK_MS = 10 * 60 * 1000;
 
   const TEAMS = {
     ember: {
       id: "ember",
       name: "Ember",
-      logId: "ember-log",
       cellsId: "ember-cells",
       /** Tide's home edge — Ember wins by capturing this column */
       targetBackC: COLS - 1,
@@ -23,7 +27,6 @@
     tide: {
       id: "tide",
       name: "Tide",
-      logId: "tide-log",
       cellsId: "tide-cells",
       /** Ember's home edge — Tide wins by capturing this column */
       targetBackC: 0,
@@ -33,18 +36,28 @@
   };
 
   const WEAPONS = {
-    // method: area (Strike) | diagonal (Breach) | forward (Artillery)
+    // method: area (Strike) | diagonal (Breach) | forward (Artillery) | disrupt (Saboteur)
+    // cost = points per spawn boost (stronger units cost more)
     offensive: [
-      { id: "strike", label: "Strike", symbol: "🗡️", power: 4, multiplier: 1, method: "area", range: 2 },
-      { id: "breach", label: "Breach", symbol: "💥", power: 5, multiplier: 0.55, method: "diagonal" },
-      { id: "artillery", label: "Artillery", symbol: "🚀", power: 2, multiplier: 0.9, method: "forward" },
+      { id: "strike", label: "Strike", symbol: "🗡️", power: 4, multiplier: 1, method: "area", range: 2, cost: 2 },
+      { id: "breach", label: "Breach", symbol: "💥", power: 6, multiplier: 0.45, method: "diagonal", cost: 3 },
+      { id: "artillery", label: "Artillery", symbol: "🚀", power: 2, multiplier: 0.8, method: "forward", cost: 6 },
+      { id: "saboteur", label: "Saboteur", symbol: "🎯", power: 5, multiplier: 1, method: "disrupt", cost: 4 },
     ],
     defensive: [
-      { id: "barricade", label: "Barricade", symbol: "🧱", armor: 18 },
-      { id: "bunker", label: "Bunker", symbol: "🛡️", armor: 32 },
-      { id: "fortify", label: "Fortify", symbol: "🏰", armor: 48 },
+      { id: "barricade", label: "Barricade", symbol: "🧱", armor: 10, cost: 1 },
+      { id: "bunker", label: "Bunker", symbol: "🛡️", armor: 32, cost: 2 },
+      { id: "fortify", label: "Fortify", symbol: "🏰", armor: 64, cost: 5 },
     ],
   };
+
+  const UNIT_CATALOG = [
+    ...WEAPONS.offensive.map((w) => ({ ...w, kind: "offensive" })),
+    ...WEAPONS.defensive.map((w) => ({ ...w, kind: "defensive" })),
+  ];
+
+  const DEFAULT_BUDGET = 50;
+  const MAX_BUDGET = 100;
 
   const DIAGONAL_DIRS = [
     [-1, -1], [-1, 1], [1, -1], [1, 1],
@@ -52,6 +65,7 @@
 
   const battlefield = document.getElementById("battlefield");
   const statusText = document.getElementById("status-text");
+  const matchTimerEl = document.getElementById("match-timer");
   const placementCountEl = document.getElementById("placement-count");
   const btnPause = document.getElementById("btn-pause");
   const btnReset = document.getElementById("btn-reset");
@@ -62,6 +76,13 @@
   const gameoverMessage = document.getElementById("gameover-message");
   const inputEmberName = document.getElementById("input-ember-name");
   const inputTideName = document.getElementById("input-tide-name");
+  const inputBudget = document.getElementById("input-budget");
+  const emberLoadoutEl = document.getElementById("ember-loadout");
+  const tideLoadoutEl = document.getElementById("tide-loadout");
+  const emberPointsLeftEl = document.getElementById("ember-points-left");
+  const tidePointsLeftEl = document.getElementById("tide-points-left");
+  const loadoutEmberTitle = document.getElementById("loadout-ember-title");
+  const loadoutTideTitle = document.getElementById("loadout-tide-title");
 
   battlefield.style.setProperty("--cols", COLS);
   battlefield.style.setProperty("--rows", ROWS);
@@ -80,10 +101,248 @@
   let placementCount = 0;
   let attackTurn = "ember";
   let matchStartedAt = 0;
+  let matchEndsAt = 0;
+  let timerRemainingMs = MATCH_DURATION_MS;
+  let inOvertime = false;
   let moveInterval = null;
   let attackInterval = null;
+  let timerInterval = null;
+  let tracerLayer = null;
+  let budgetPoints = DEFAULT_BUDGET;
+  const loadouts = {
+    ember: emptyLoadout(),
+    tide: emptyLoadout(),
+  };
 
   const attackTurnLabel = document.getElementById("attack-turn-label");
+
+  function emptyLoadout() {
+    const out = {};
+    for (const unit of UNIT_CATALOG) out[unit.id] = 0;
+    return out;
+  }
+
+  function unitById(id) {
+    return UNIT_CATALOG.find((u) => u.id === id);
+  }
+
+  function spentPoints(teamId) {
+    let spent = 0;
+    for (const unit of UNIT_CATALOG) {
+      spent += (loadouts[teamId][unit.id] || 0) * unit.cost;
+    }
+    return spent;
+  }
+
+  function pointsLeft(teamId) {
+    return Math.max(0, budgetPoints - spentPoints(teamId));
+  }
+
+  function clampLoadoutsToBudget() {
+    for (const teamId of ["ember", "tide"]) {
+      while (spentPoints(teamId) > budgetPoints) {
+        let trimmed = false;
+        for (let i = UNIT_CATALOG.length - 1; i >= 0; i--) {
+          const id = UNIT_CATALOG[i].id;
+          if (loadouts[teamId][id] > 0) {
+            loadouts[teamId][id] -= 1;
+            trimmed = true;
+            break;
+          }
+        }
+        if (!trimmed) break;
+      }
+    }
+  }
+
+  function loadoutLevels(teamId, unitId) {
+    return loadouts[teamId][unitId] || 0;
+  }
+
+  function getMatchElapsedMs() {
+    if (!started) return 0;
+    if (inOvertime) {
+      const otRemaining = paused
+        ? timerRemainingMs
+        : Math.max(0, matchEndsAt - Date.now());
+      return MATCH_DURATION_MS + (OVERTIME_DURATION_MS - otRemaining);
+    }
+    const remaining = paused
+      ? timerRemainingMs
+      : Math.max(0, matchEndsAt - Date.now());
+    return MATCH_DURATION_MS - remaining;
+  }
+
+  function isSaboteurUnlocked() {
+    return getMatchElapsedMs() >= SABOTEUR_UNLOCK_MS;
+  }
+
+  /** Each purchase adds 1% spawn chance; locked Saboteur stays in the empty pool. */
+  function activeSpawnChance(teamId, unitId) {
+    if (unitId === "saboteur" && !isSaboteurUnlocked()) return 0;
+    return loadoutLevels(teamId, unitId);
+  }
+
+  function nothingChancePct(teamId) {
+    const active = UNIT_CATALOG.reduce(
+      (sum, unit) => sum + activeSpawnChance(teamId, unit.id),
+      0,
+    );
+    return Math.max(0, 100 - active);
+  }
+
+  function spawnChancePct(teamId, unitId) {
+    return loadoutLevels(teamId, unitId);
+  }
+
+  /** Roll a unit from the loadout, or null when the "nothing" weight wins. */
+  function pickWeightedUnit(teamId) {
+    let roll = Math.random() * 100;
+    const empty = nothingChancePct(teamId);
+    if (roll < empty) return null;
+    roll -= empty;
+
+    for (const unit of UNIT_CATALOG) {
+      const chance = activeSpawnChance(teamId, unit.id);
+      if (chance <= 0) continue;
+      roll -= chance;
+      if (roll < 0) return unit;
+    }
+
+    return null;
+  }
+
+  function setBudget(next) {
+    const value = Math.max(0, Math.min(MAX_BUDGET, Math.round(Number(next) || 0)));
+    budgetPoints = value;
+    if (inputBudget) inputBudget.value = String(value);
+    clampLoadoutsToBudget();
+    updateLoadoutUI();
+  }
+
+  function adjustLoadout(teamId, unitId, delta) {
+    const unit = unitById(unitId);
+    if (!unit) return;
+
+    const current = loadouts[teamId][unitId] || 0;
+    if (delta > 0) {
+      if (pointsLeft(teamId) < unit.cost) return;
+      loadouts[teamId][unitId] = current + 1;
+    } else if (delta < 0 && current > 0) {
+      loadouts[teamId][unitId] = current - 1;
+    }
+    updateLoadoutUI();
+  }
+
+  function buildLoadoutUI() {
+    for (const teamId of ["ember", "tide"]) {
+      const root = teamId === "ember" ? emberLoadoutEl : tideLoadoutEl;
+      if (!root) continue;
+      root.innerHTML = "";
+
+      for (const unit of UNIT_CATALOG) {
+        const row = document.createElement("div");
+        row.className = "loadout-row";
+        row.dataset.unit = unit.id;
+
+        const kindLabel = unit.id === "saboteur"
+          ? `Offensive · ${unit.cost} pts/+1% · after 10m`
+          : unit.kind === "offensive"
+            ? `Offensive · ${unit.cost} pts/+1%`
+            : `Defensive · ${unit.cost} pts/+1%`;
+
+        row.innerHTML = `
+          <div class="loadout-unit">
+            <span class="loadout-unit-symbol" aria-hidden="true">${unit.symbol}</span>
+            <div class="loadout-unit-meta">
+              <strong>${unit.label}</strong>
+              <span>${kindLabel}</span>
+            </div>
+          </div>
+          <div class="loadout-controls">
+            <button type="button" data-action="dec" aria-label="Decrease ${unit.label}">−</button>
+            <span class="loadout-level">0</span>
+            <button type="button" data-action="inc" aria-label="Increase ${unit.label}">+</button>
+          </div>
+          <div class="loadout-chance" title="Spawn chance"><i></i></div>
+        `;
+
+        row.querySelector('[data-action="dec"]').addEventListener("click", () => {
+          adjustLoadout(teamId, unit.id, -1);
+        });
+        row.querySelector('[data-action="inc"]').addEventListener("click", () => {
+          adjustLoadout(teamId, unit.id, 1);
+        });
+
+        root.appendChild(row);
+      }
+    }
+
+    updateLoadoutUI();
+  }
+
+  function updateHudLoadouts() {
+    for (const teamId of ["ember", "tide"]) {
+      const list = document.getElementById(`${teamId}-hud-loadout`);
+      if (!list) continue;
+      list.innerHTML = "";
+
+      let hasBoosts = false;
+      for (const unit of UNIT_CATALOG) {
+        const chance = spawnChancePct(teamId, unit.id);
+        if (chance <= 0) continue;
+        hasBoosts = true;
+
+        const li = document.createElement("li");
+        const locked = unit.id === "saboteur" ? " · after 10m" : "";
+        li.innerHTML = `
+          <span class="hud-loadout-symbol" aria-hidden="true">${unit.symbol}</span>
+          <span>${unit.label}</span>
+          <span class="hud-loadout-chance">${chance}%${locked}</span>
+        `;
+        list.appendChild(li);
+      }
+
+      const emptyLi = document.createElement("li");
+      emptyLi.className = "hud-loadout-empty";
+      const empty = nothingChancePct(teamId);
+      emptyLi.innerHTML = hasBoosts
+        ? `<span>Empty</span><span class="hud-loadout-chance">${empty}%</span>`
+        : `<span>No boosts · ${empty}% empty</span>`;
+      list.appendChild(emptyLi);
+    }
+  }
+
+  function updateLoadoutUI() {
+    if (emberPointsLeftEl) {
+      emberPointsLeftEl.textContent = `${pointsLeft("ember")} pts · ${nothingChancePct("ember").toFixed(0)}% empty`;
+    }
+    if (tidePointsLeftEl) {
+      tidePointsLeftEl.textContent = `${pointsLeft("tide")} pts · ${nothingChancePct("tide").toFixed(0)}% empty`;
+    }
+    if (loadoutEmberTitle) loadoutEmberTitle.textContent = TEAMS.ember.name;
+    if (loadoutTideTitle) loadoutTideTitle.textContent = TEAMS.tide.name;
+
+    for (const teamId of ["ember", "tide"]) {
+      const root = teamId === "ember" ? emberLoadoutEl : tideLoadoutEl;
+      if (!root) continue;
+      const left = pointsLeft(teamId);
+
+      for (const unit of UNIT_CATALOG) {
+        const row = root.querySelector(`[data-unit="${unit.id}"]`);
+        if (!row) continue;
+        const level = loadouts[teamId][unit.id] || 0;
+        const chance = spawnChancePct(teamId, unit.id);
+        row.querySelector(".loadout-level").textContent = String(level);
+        row.querySelector(".loadout-chance > i").style.width = `${chance}%`;
+        row.querySelector(".loadout-chance").title = `${chance}% spawn chance`;
+        row.querySelector('[data-action="dec"]').disabled = level <= 0;
+        row.querySelector('[data-action="inc"]').disabled = left < unit.cost;
+      }
+    }
+
+    updateHudLoadouts();
+  }
 
   function sanitizeName(value, fallback) {
     const cleaned = String(value || "").trim().replace(/\s+/g, " ").slice(0, 16);
@@ -104,6 +363,7 @@
     document.getElementById("ember-goal-label").textContent = `${TEAMS.ember.name} wants right edge`;
     document.getElementById("tide-goal-label").textContent = `${TEAMS.tide.name} wants left edge`;
     updateAttackTurnLabel();
+    updateLoadoutUI();
   }
 
   function updateAttackTurnLabel() {
@@ -117,7 +377,7 @@
     gameoverScreen.classList.add("hidden");
     gameoverScreen.setAttribute("aria-hidden", "true");
     btnPause.disabled = true;
-    statusText.textContent = "Name your teams, then start the war";
+    statusText.textContent = "Name teams, set loadouts, then start the war";
   }
 
   function hideStartScreen() {
@@ -127,9 +387,9 @@
 
   function showGameOverScreen(message) {
     gameoverMessage.textContent = message;
+    hideStartScreen();
     gameoverScreen.classList.remove("hidden");
     gameoverScreen.setAttribute("aria-hidden", "false");
-    hideStartScreen();
   }
 
   function idx(r, c) {
@@ -171,6 +431,9 @@
   function createGrid() {
     battlefield.innerHTML = "";
     cells = [];
+    tracerLayer = document.createElement("div");
+    tracerLayer.className = "attack-tracers";
+    battlefield.appendChild(tracerLayer);
 
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
@@ -200,10 +463,41 @@
     updateScores();
   }
 
+  function cellCenter(r, c) {
+    const cellRect = cells[idx(r, c)].el.getBoundingClientRect();
+    const fieldRect = battlefield.getBoundingClientRect();
+    return {
+      x: cellRect.left - fieldRect.left + cellRect.width / 2,
+      y: cellRect.top - fieldRect.top + cellRect.height / 2,
+    };
+  }
+
+  function showAttackTracer(teamId, fromR, fromC, toR, toC) {
+    if (!tracerLayer) return;
+
+    const start = cellCenter(fromR, fromC);
+    const end = cellCenter(toR, toC);
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const length = Math.hypot(dx, dy);
+    if (length < 2) return;
+
+    const tracer = document.createElement("div");
+    tracer.className = `attack-tracer ${teamId}`;
+    tracer.style.left = `${start.x}px`;
+    tracer.style.top = `${start.y}px`;
+    tracer.style.width = `${length}px`;
+    tracer.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
+    tracerLayer.appendChild(tracer);
+
+    setTimeout(() => tracer.remove(), 320);
+  }
+
   function paintCell(cell) {
     cell.el.classList.remove("ember", "tide");
     cell.el.classList.add(cell.owner);
 
+    cell.el.querySelector(".armor-bar")?.remove();
     const existing = cell.el.querySelector(".weapon");
     if (existing) existing.remove();
 
@@ -211,10 +505,42 @@
       const w = document.createElement("span");
       w.className = `weapon ${cell.weapon.kind}`;
       w.textContent = cell.weapon.symbol;
-      w.title = cell.weapon.kind === "defensive"
-        ? `${cell.weapon.label} · armor ${cell.armor}`
-        : `${cell.weapon.label} · power ${cell.weapon.power} · mult ${cell.weapon.multiplier}`;
+      if (cell.weapon.kind === "defensive") {
+        const maxArmor = cell.weapon.armor;
+        w.title = `${cell.weapon.label} · armor ${Math.ceil(cell.armor)} / ${maxArmor}`;
+      } else {
+        w.title = `${cell.weapon.label} · power ${cell.weapon.power} · mult ${cell.weapon.multiplier}`;
+      }
       cell.el.appendChild(w);
+    }
+
+    updateArmorBar(cell);
+  }
+
+  function updateArmorBar(cell) {
+    const existing = cell.el.querySelector(".armor-bar");
+    if (!cell.weapon || cell.weapon.kind !== "defensive" || cell.armor <= 0) {
+      existing?.remove();
+      return;
+    }
+
+    const maxArmor = cell.weapon.armor;
+    const pct = Math.max(0, Math.min(100, (cell.armor / maxArmor) * 100));
+
+    let bar = existing;
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.className = "armor-bar";
+      bar.innerHTML = '<div class="armor-bar-fill"></div>';
+      cell.el.appendChild(bar);
+    }
+
+    bar.querySelector(".armor-bar-fill").style.width = `${pct}%`;
+    bar.title = `Armor ${Math.ceil(cell.armor)} / ${maxArmor}`;
+
+    const wEl = cell.el.querySelector(".weapon");
+    if (wEl) {
+      wEl.title = `${cell.weapon.label} · armor ${Math.ceil(cell.armor)} / ${maxArmor}`;
     }
   }
 
@@ -243,6 +569,43 @@
     return held;
   }
 
+  function formatMatchTime(ms) {
+    const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${String(seconds).padStart(2, "0")}`;
+  }
+
+  function countUnitsOnBoard() {
+    let ember = 0;
+    let tide = 0;
+    for (const cell of cells) {
+      if (!cell.weapon) continue;
+      if (cell.owner === "ember") ember += 1;
+      if (cell.owner === "tide") tide += 1;
+    }
+    return { ember, tide };
+  }
+
+  function updateTimerDisplay() {
+    if (!matchTimerEl) return;
+
+    if (!started || winner) {
+      matchTimerEl.textContent = formatMatchTime(MATCH_DURATION_MS);
+      matchTimerEl.classList.remove("low", "overtime");
+      return;
+    }
+
+    const remaining = paused
+      ? timerRemainingMs
+      : Math.max(0, matchEndsAt - Date.now());
+    matchTimerEl.textContent = inOvertime
+      ? `OT ${formatMatchTime(remaining)}`
+      : formatMatchTime(remaining);
+    matchTimerEl.classList.toggle("overtime", inOvertime);
+    matchTimerEl.classList.toggle("low", remaining > 0 && remaining <= 60_000);
+  }
+
   function updateScores() {
     let ember = 0;
     let tide = 0;
@@ -253,16 +616,6 @@
     document.getElementById("ember-cells").textContent = String(ember);
     document.getElementById("tide-cells").textContent = String(tide);
     placementCountEl.textContent = `${placementCount} placement${placementCount === 1 ? "" : "s"}`;
-  }
-
-  function logEvent(teamId, message) {
-    const list = document.getElementById(TEAMS[teamId].logId);
-    const li = document.createElement("li");
-    li.textContent = message;
-    li.classList.add("fresh");
-    list.prepend(li);
-    while (list.children.length > 6) list.removeChild(list.lastChild);
-    setTimeout(() => li.classList.remove("fresh"), 900);
   }
 
   /** One step of a full-grid snake scan (covers every square in order). */
@@ -305,6 +658,22 @@
     } while (!isOwn(teamId, cursor.r, cursor.c) && idx(cursor.r, cursor.c) !== startKey);
   }
 
+  function endMatch(reason, teamId, message) {
+    winner = teamId;
+    started = false;
+    stopLoops();
+    paused = true;
+    btnPause.textContent = "Resume";
+    btnPause.disabled = true;
+    statusText.textContent = message;
+    battlefield.classList.add("game-over");
+    if (teamId === "ember" || teamId === "tide") {
+      battlefield.classList.add(`winner-${teamId}`);
+    }
+    updateTimerDisplay();
+    showGameOverScreen(message);
+  }
+
   function declareWinner(teamId) {
     winner = teamId;
     started = false;
@@ -315,9 +684,56 @@
     const held = backRowHeld(teamId);
     const message = `${TEAMS[teamId].name} holds the enemy back row (${held}) — victory!`;
     statusText.textContent = message;
-    logEvent(teamId, "Took the enemy back row!");
     battlefield.classList.add("game-over", `winner-${teamId}`);
+    updateTimerDisplay();
     showGameOverScreen(message);
+  }
+
+  function startOvertime(units) {
+    inOvertime = true;
+    timerRemainingMs = OVERTIME_DURATION_MS;
+    matchEndsAt = Date.now() + OVERTIME_DURATION_MS;
+    statusText.textContent = `Overtime — tied at ${units.ember} units. Most units when OT ends wins!`;
+    updateTimerDisplay();
+  }
+
+  function endMatchByTime() {
+    if (winner || !started) return;
+
+    const units = countUnitsOnBoard();
+    if (units.ember > units.tide) {
+      endMatch(
+        "time",
+        "ember",
+        `${TEAMS.ember.name} wins on time — ${units.ember} units vs ${units.tide}`,
+      );
+      return;
+    }
+    if (units.tide > units.ember) {
+      endMatch(
+        "time",
+        "tide",
+        `${TEAMS.tide.name} wins on time — ${units.tide} units vs ${units.ember}`,
+      );
+      return;
+    }
+
+    if (!inOvertime) {
+      startOvertime(units);
+      return;
+    }
+
+    endMatch(
+      "time",
+      "tie",
+      `Overtime ended — still tied on units (${units.ember} each)`,
+    );
+  }
+
+  function tickMatchTimer() {
+    if (!started || winner || paused) return;
+    updateTimerDisplay();
+    if (Date.now() >= matchEndsAt) endMatchByTime();
   }
 
   function checkWin() {
@@ -335,6 +751,7 @@
       const message = "Dead heat — both hold the enemy back row!";
       statusText.textContent = message;
       battlefield.classList.add("game-over");
+      updateTimerDisplay();
       showGameOverScreen(message);
       return true;
     }
@@ -350,8 +767,6 @@
   }
 
   function tryPlace(teamId) {
-    if (Math.random() >= PLACE_CHANCE) return null;
-
     const cursor = cursors[teamId];
     const cell = cells[idx(cursor.r, cursor.c)];
     if (cell.owner !== teamId) return null;
@@ -360,9 +775,10 @@
     const inOpening = started && Date.now() - matchStartedAt < NO_OVERWRITE_MS;
     if (inOpening && cell.weapon) return null;
 
-    const kind = Math.random() < 0.55 ? "offensive" : "defensive";
-    const blueprint = pick(WEAPONS[kind]);
+    const blueprint = pickWeightedUnit(teamId);
+    if (!blueprint) return null;
 
+    const kind = blueprint.kind;
     cell.weapon = { ...blueprint, kind, team: teamId };
     cell.armor = kind === "defensive" ? blueprint.armor : 0;
     paintCell(cell);
@@ -370,7 +786,6 @@
     setTimeout(() => cell.el.classList.remove("flash-capture"), 550);
 
     placementCount += 1;
-    logEvent(teamId, `Placed ${blueprint.label} at ${cursor.r + 1},${cursor.c + 1}`);
     return blueprint.label;
   }
 
@@ -404,7 +819,7 @@
 
   /**
    * Breach — diagonal rays only
-   * Artillery — straight horizontal toward the enemy end only
+   * Artillery / Saboteur — straight horizontal toward the enemy end only
    * Strike uses a single in-range hit instead (see resolveStrikeAttack)
    */
   function dirsForWeapon(weapon, teamId) {
@@ -443,10 +858,41 @@
     return hits;
   }
 
-  /** Power falls off with travel distance; higher multiplier keeps more punch at range. */
+  /** Saboteur flies over empty land and only stops on the first enemy unit. */
+  function traceDisruptPaths(teamId, startR, startC, weapon) {
+    const hits = [];
+
+    for (const [dr, dc] of dirsForWeapon(weapon, teamId)) {
+      let r = startR;
+      let c = startC;
+      let distance = 0;
+
+      while (true) {
+        r += dr;
+        c += dc;
+        distance += 1;
+        if (!inBounds(r, c)) break;
+
+        const cell = cells[idx(r, c)];
+        if (cell.owner === teamId) continue;
+        if (!cell.weapon) continue;
+
+        hits.push({ cell, r, c, distance, dr, dc });
+        break;
+      }
+    }
+
+    return hits;
+  }
+
   /** Power falls off with travel distance; kept as a float (not rounded down). */
   function attackPower(weapon, distance) {
     return weapon.power * Math.pow(weapon.multiplier, Math.max(0, distance - 1));
+  }
+
+  /** Ray attacks (Breach, Artillery) roll variance each volley; Strike does not. */
+  function rayAttackVariance() {
+    return 0.5 + Math.random() * 1.5;
   }
 
   /** Hit a single enemy cell once (used by Strike). */
@@ -469,7 +915,7 @@
       }
 
       if (cell.armor > 0) {
-        paintCell(cell);
+        updateArmorBar(cell);
         return false;
       }
 
@@ -478,8 +924,7 @@
       paintCell(cell);
     }
 
-    if (power < 1) return false;
-
+    power -= 1;
     cell.owner = attackerTeam;
     cell.weapon = null;
     cell.armor = 0;
@@ -524,6 +969,7 @@
     pool = pool.filter((t) => Math.abs(t.c - targetCol) === bestBack);
 
     const chosen = pick(pool);
+    showAttackTracer(attackerTeam, fromR, fromC, chosen.r, chosen.c);
     return hitEnemyCell(attackerTeam, weapon, chosen.cell, chosen.distance) ? 1 : 0;
   }
 
@@ -534,14 +980,13 @@
    * Moving one square deeper multiplies remaining power by the weapon multiplier again.
    */
   function resolveAttackPush(attackerTeam, weapon, hit) {
-    let power = attackPower(weapon, hit.distance);
+    let power = attackPower(weapon, hit.distance) * rayAttackVariance();
     let r = hit.r;
     let c = hit.c;
     let distance = hit.distance;
     let captures = 0;
 
     if (power <= 0) {
-      logEvent(attackerTeam, `${weapon.label} fizzled at range ${distance}`);
       return 0;
     }
 
@@ -564,22 +1009,17 @@
         }
 
         if (cell.armor > 0) {
-          paintCell(cell);
-          logEvent(attackerTeam, `${weapon.label} −${blocked} armor (d${distance}, ${cell.armor} left)`);
+          updateArmorBar(cell);
           break;
         }
 
         cell.weapon = null;
         cell.armor = 0;
         paintCell(cell);
-        logEvent(attackerTeam, `${weapon.label} breached defense (d${distance})`);
       }
 
-      // Capture costs 1 from whatever power is left after multipliers + armour
-      if (power < 1) {
-        logEvent(attackerTeam, `${weapon.label} spent — couldn't take ${r + 1},${c + 1}`);
-        break;
-      }
+      // Breach needs at least 1 power to take a square; Artillery can capture with fractional power
+      if (weapon.method === "diagonal" && power < 1) break;
 
       power -= 1;
       cell.owner = attackerTeam;
@@ -589,6 +1029,9 @@
       cell.el.classList.add("flash-capture");
       setTimeout(() => cell.el.classList.remove("flash-capture"), 550);
       captures += 1;
+
+      // Artillery stops after a single capture
+      if (weapon.method === "forward") break;
 
       r += hit.dr;
       c += hit.dc;
@@ -603,13 +1046,56 @@
     return captures;
   }
 
+  /**
+   * Saboteur — damage units only, never capture territory.
+   * Stops on the first enemy unit in the ray.
+   */
+  function resolveDisruptShot(attackerTeam, weapon, hit) {
+    let power = attackPower(weapon, hit.distance);
+    if (power <= 0) return 0;
+
+    const cell = hit.cell;
+    if (cell.owner === attackerTeam || !cell.weapon) return 0;
+
+    cell.el.classList.add("under-fire");
+    setTimeout(() => cell.el.classList.remove("under-fire"), 450);
+
+    if (cell.weapon.kind === "defensive" && cell.armor > 0) {
+      const blocked = Math.min(power, cell.armor);
+      cell.armor -= blocked;
+      power -= blocked;
+
+      const wEl = cell.el.querySelector(".weapon");
+      if (wEl) {
+        wEl.classList.add("hit");
+        setTimeout(() => wEl.classList.remove("hit"), 450);
+      }
+
+      if (cell.armor > 0) {
+        updateArmorBar(cell);
+        return 0;
+      }
+
+      cell.weapon = null;
+      cell.armor = 0;
+      paintCell(cell);
+      return 1;
+    }
+
+    // Offensive units are destroyed outright; ownership stays with the enemy
+    cell.weapon = null;
+    cell.armor = 0;
+    paintCell(cell);
+    return 1;
+  }
+
   function pickAttackTarget(teamId, hits, weapon) {
     if (!hits.length) return null;
 
     const targetCol = TEAMS[teamId].targetBackC;
 
-    // Artillery always prioritises the enemy back row when any ray can reach it
-    if (weapon.method === "forward") {
+    // Artillery / Saboteur: prioritise the enemy back row when any ray can reach it
+    if (weapon.method === "forward" || weapon.method === "disrupt") {
       const onBack = hits.filter((h) => h.c === targetCol);
       if (onBack.length) {
         const minDist = Math.min(...onBack.map((h) => h.distance));
@@ -646,12 +1132,14 @@
     }
 
     let captures = 0;
+    let destroys = 0;
     let volleys = 0;
 
     for (const { r, c, cell } of attackers) {
       const weapon = cell.weapon;
       const wEl = cell.el.querySelector(".weapon");
       let gained = 0;
+      let cleared = 0;
 
       if (weapon.method === "area") {
         const range = weapon.range || 2;
@@ -664,6 +1152,19 @@
 
         gained = resolveStrikeAttack(cell.owner, weapon, r, c);
         volleys += 1;
+      } else if (weapon.method === "disrupt") {
+        const hits = traceDisruptPaths(cell.owner, r, c, weapon);
+        const chosen = pickAttackTarget(cell.owner, hits, weapon);
+        if (!chosen) continue;
+
+        if (wEl) {
+          wEl.classList.add("firing");
+          setTimeout(() => wEl.classList.remove("firing"), 400);
+        }
+
+        volleys += 1;
+        showAttackTracer(cell.owner, r, c, chosen.r, chosen.c);
+        cleared = resolveDisruptShot(cell.owner, weapon, chosen);
       } else {
         const hits = traceAttackPaths(cell.owner, r, c, weapon);
         const chosen = pickAttackTarget(cell.owner, hits, weapon);
@@ -675,15 +1176,12 @@
         }
 
         volleys += 1;
+        showAttackTracer(cell.owner, r, c, chosen.r, chosen.c);
         gained = resolveAttackPush(cell.owner, weapon, chosen);
       }
 
       captures += gained;
-      if (gained > 0) {
-        logEvent(cell.owner, `${weapon.label} took ${gained} cell${gained === 1 ? "" : "s"}`);
-      } else if (weapon.method === "area") {
-        logEvent(cell.owner, `${weapon.label} hit nearby defences`);
-      }
+      destroys += cleared;
     }
 
     settleOnOwn("ember");
@@ -695,7 +1193,12 @@
 
     const teamName = TEAMS[teamId].name;
     if (volleys) {
-      statusText.textContent = `${teamName} turn — ${volleys} attack${volleys === 1 ? "" : "s"} · ${captures} capture${captures === 1 ? "" : "s"}`;
+      const parts = [
+        `${volleys} attack${volleys === 1 ? "" : "s"}`,
+        `${captures} capture${captures === 1 ? "" : "s"}`,
+      ];
+      if (destroys) parts.push(`${destroys} destroy${destroys === 1 ? "" : "s"}`);
+      statusText.textContent = `${teamName} turn — ${parts.join(" · ")}`;
     } else {
       statusText.textContent = `${teamName} turn — no shots fired`;
     }
@@ -708,33 +1211,48 @@
     stopLoops();
     moveInterval = setInterval(moveCursors, MOVE_MS);
     attackInterval = setInterval(runAttacks, ATTACK_MS);
+    timerInterval = setInterval(tickMatchTimer, 250);
+    updateTimerDisplay();
   }
 
   function stopLoops() {
     clearInterval(moveInterval);
     clearInterval(attackInterval);
+    clearInterval(timerInterval);
     moveInterval = null;
     attackInterval = null;
+    timerInterval = null;
   }
 
   function setPaused(next) {
     if (!started || winner) return;
-    paused = next;
+    if (next === paused) return;
+
+    if (next) {
+      timerRemainingMs = Math.max(0, matchEndsAt - Date.now());
+      stopLoops();
+      paused = true;
+      updateTimerDisplay();
+    } else {
+      matchEndsAt = Date.now() + timerRemainingMs;
+      paused = false;
+      startLoops();
+    }
+
     btnPause.textContent = paused ? "Resume" : "Pause";
     statusText.textContent = paused ? "Paused" : "Scanning own territory…";
-    if (!paused) startLoops();
-    else stopLoops();
   }
 
   function prepareMatch() {
     stopLoops();
-    document.getElementById("ember-log").innerHTML = "";
-    document.getElementById("tide-log").innerHTML = "";
     placementCount = 0;
     winner = null;
     paused = false;
     started = false;
     matchStartedAt = 0;
+    matchEndsAt = 0;
+    timerRemainingMs = MATCH_DURATION_MS;
+    inOvertime = false;
     attackTurn = "ember";
     btnPause.textContent = "Pause";
     btnPause.disabled = true;
@@ -742,6 +1260,7 @@
     createGrid();
     updateScores();
     updateAttackTurnLabel();
+    updateTimerDisplay();
   }
 
   function beginMatch() {
@@ -753,8 +1272,11 @@
     started = true;
     paused = false;
     matchStartedAt = Date.now();
+    matchEndsAt = matchStartedAt + MATCH_DURATION_MS;
+    timerRemainingMs = MATCH_DURATION_MS;
+    inOvertime = false;
     btnPause.disabled = false;
-    statusText.textContent = "War started — take the enemy back row";
+    statusText.textContent = "War started — take the enemy back row or hold the most units when time runs out";
     startLoops();
   }
 
@@ -775,12 +1297,24 @@
   btnStart.addEventListener("click", beginMatch);
   btnDismiss.addEventListener("click", dismissGameOver);
 
+  if (inputBudget) {
+    inputBudget.addEventListener("change", () => setBudget(inputBudget.value));
+    inputBudget.addEventListener("input", () => setBudget(inputBudget.value));
+  }
+
   [inputEmberName, inputTideName].forEach((input) => {
+    input.addEventListener("input", () => {
+      TEAMS.ember.name = sanitizeName(inputEmberName.value, "Ember");
+      TEAMS.tide.name = sanitizeName(inputTideName.value, "Tide");
+      updateTeamLabels();
+    });
     input.addEventListener("keydown", (event) => {
       if (event.key === "Enter") beginMatch();
     });
   });
 
+  buildLoadoutUI();
+  setBudget(DEFAULT_BUDGET);
   prepareMatch();
   updateTeamLabels();
   showStartScreen();
