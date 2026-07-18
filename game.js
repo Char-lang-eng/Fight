@@ -6,7 +6,7 @@
   /** How many cells of the enemy back row you need to own to win */
   const BACK_ROW_TO_WIN = 1;
   /** For this long after kickoff, cursors cannot overwrite occupied tiles */
-  const NO_OVERWRITE_MS = 60_000;
+  const NO_OVERWRITE_MS = 120_000;
   /** Match length; most units on the board wins when time runs out */
   const MATCH_DURATION_MS = 20 * 60 * 1000;
   /** Extra time when regulation ends tied on units */
@@ -18,7 +18,6 @@
     ember: {
       id: "ember",
       name: "Ember",
-      cellsId: "ember-cells",
       /** Tide's home edge — Ember wins by capturing this column */
       targetBackC: COLS - 1,
       startC: 0,
@@ -27,7 +26,6 @@
     tide: {
       id: "tide",
       name: "Tide",
-      cellsId: "tide-cells",
       /** Ember's home edge — Tide wins by capturing this column */
       targetBackC: 0,
       startC: COLS - 1,
@@ -40,8 +38,8 @@
     // cost = points per spawn boost (stronger units cost more)
     offensive: [
       { id: "strike", label: "Strike", symbol: "🗡️", power: 4, multiplier: 1, method: "area", range: 2, cost: 2 },
-      { id: "breach", label: "Breach", symbol: "💥", power: 6, multiplier: 0.45, method: "diagonal", cost: 3 },
-      { id: "artillery", label: "Artillery", symbol: "🚀", power: 2, multiplier: 0.8, method: "forward", cost: 6 },
+      { id: "breach", label: "Breach", symbol: "💥", power: 6, multiplier: 0.45, method: "diagonal", cost: 6 },
+      { id: "artillery", label: "Artillery", symbol: "🚀", power: 1, multiplier: 0.8, method: "forward", cost: 3 },
       { id: "saboteur", label: "Saboteur", symbol: "🎯", power: 5, multiplier: 1, method: "disrupt", cost: 4 },
     ],
     defensive: [
@@ -58,6 +56,16 @@
 
   const DEFAULT_BUDGET = 50;
   const MAX_BUDGET = 100;
+  /** Shared preset applied by Quick start (exactly 50 points). */
+  const QUICK_START_LOADOUT = {
+    strike: 3,
+    breach: 2,
+    artillery: 3,
+    saboteur: 1,
+    barricade: 8,
+    bunker: 3,
+    fortify: 1,
+  };
 
   const DIAGONAL_DIRS = [
     [-1, -1], [-1, 1], [1, -1], [1, 1],
@@ -70,10 +78,12 @@
   const btnPause = document.getElementById("btn-pause");
   const btnReset = document.getElementById("btn-reset");
   const btnStart = document.getElementById("btn-start");
+  const btnQuickStart = document.getElementById("btn-quick-start");
   const btnDismiss = document.getElementById("btn-dismiss");
   const startScreen = document.getElementById("start-screen");
   const gameoverScreen = document.getElementById("gameover-screen");
   const gameoverMessage = document.getElementById("gameover-message");
+  const gameoverDuration = document.getElementById("gameover-duration");
   const inputEmberName = document.getElementById("input-ember-name");
   const inputTideName = document.getElementById("input-tide-name");
   const inputBudget = document.getElementById("input-budget");
@@ -160,7 +170,16 @@
   }
 
   function getMatchElapsedMs() {
+    // After a match ends, started is false — use the frozen remaining clock
+    if (winner) {
+      if (inOvertime) {
+        return MATCH_DURATION_MS + (OVERTIME_DURATION_MS - timerRemainingMs);
+      }
+      return Math.max(0, MATCH_DURATION_MS - timerRemainingMs);
+    }
+
     if (!started) return 0;
+
     if (inOvertime) {
       const otRemaining = paused
         ? timerRemainingMs
@@ -210,6 +229,23 @@
     }
 
     return null;
+  }
+
+  function applyLoadoutPreset(preset) {
+    for (const teamId of ["ember", "tide"]) {
+      loadouts[teamId] = emptyLoadout();
+      for (const unit of UNIT_CATALOG) {
+        loadouts[teamId][unit.id] = Math.max(0, Math.round(Number(preset[unit.id]) || 0));
+      }
+    }
+    clampLoadoutsToBudget();
+    updateLoadoutUI();
+  }
+
+  function quickStartMatch() {
+    setBudget(DEFAULT_BUDGET);
+    applyLoadoutPreset(QUICK_START_LOADOUT);
+    beginMatch();
   }
 
   function setBudget(next) {
@@ -360,8 +396,6 @@
   function updateTeamLabels() {
     document.getElementById("ember-name-label").textContent = TEAMS.ember.name;
     document.getElementById("tide-name-label").textContent = TEAMS.tide.name;
-    document.getElementById("ember-goal-label").textContent = `${TEAMS.ember.name} wants right edge`;
-    document.getElementById("tide-goal-label").textContent = `${TEAMS.tide.name} wants left edge`;
     updateAttackTurnLabel();
     updateLoadoutUI();
   }
@@ -385,11 +419,24 @@
     startScreen.setAttribute("aria-hidden", "true");
   }
 
-  function showGameOverScreen(message) {
+  function showGameOverScreen(message, durationLabel = null) {
     gameoverMessage.textContent = message;
+    if (gameoverDuration) {
+      if (durationLabel) {
+        gameoverDuration.textContent = durationLabel;
+        gameoverDuration.classList.remove("hidden");
+      } else {
+        gameoverDuration.textContent = "";
+        gameoverDuration.classList.add("hidden");
+      }
+    }
     hideStartScreen();
     gameoverScreen.classList.remove("hidden");
     gameoverScreen.setAttribute("aria-hidden", "false");
+  }
+
+  function formatMatchDurationLabel() {
+    return `Match length: ${formatMatchTime(getMatchElapsedMs())}`;
   }
 
   function idx(r, c) {
@@ -590,9 +637,19 @@
   function updateTimerDisplay() {
     if (!matchTimerEl) return;
 
-    if (!started || winner) {
+    // Lobby / fresh board only — keep the final clock after a match ends
+    if (!started && !winner) {
       matchTimerEl.textContent = formatMatchTime(MATCH_DURATION_MS);
       matchTimerEl.classList.remove("low", "overtime");
+      return;
+    }
+
+    if (winner) {
+      matchTimerEl.textContent = inOvertime
+        ? `OT ${formatMatchTime(timerRemainingMs)}`
+        : formatMatchTime(timerRemainingMs);
+      matchTimerEl.classList.toggle("overtime", inOvertime);
+      matchTimerEl.classList.toggle("low", timerRemainingMs > 0 && timerRemainingMs <= 60_000);
       return;
     }
 
@@ -606,15 +663,14 @@
     matchTimerEl.classList.toggle("low", remaining > 0 && remaining <= 60_000);
   }
 
+  function freezeMatchTimer() {
+    timerRemainingMs = Math.max(0, matchEndsAt - Date.now());
+  }
+
   function updateScores() {
-    let ember = 0;
-    let tide = 0;
-    for (const cell of cells) {
-      if (cell.owner === "ember") ember++;
-      if (cell.owner === "tide") tide++;
-    }
-    document.getElementById("ember-cells").textContent = String(ember);
-    document.getElementById("tide-cells").textContent = String(tide);
+    const units = countUnitsOnBoard();
+    document.getElementById("ember-units").textContent = String(units.ember);
+    document.getElementById("tide-units").textContent = String(units.tide);
     placementCountEl.textContent = `${placementCount} placement${placementCount === 1 ? "" : "s"}`;
   }
 
@@ -659,6 +715,7 @@
   }
 
   function endMatch(reason, teamId, message) {
+    freezeMatchTimer();
     winner = teamId;
     started = false;
     stopLoops();
@@ -675,6 +732,7 @@
   }
 
   function declareWinner(teamId) {
+    freezeMatchTimer();
     winner = teamId;
     started = false;
     stopLoops();
@@ -686,7 +744,7 @@
     statusText.textContent = message;
     battlefield.classList.add("game-over", `winner-${teamId}`);
     updateTimerDisplay();
-    showGameOverScreen(message);
+    showGameOverScreen(message, formatMatchDurationLabel());
   }
 
   function startOvertime(units) {
@@ -743,6 +801,7 @@
     const tideWins = tideHeld >= BACK_ROW_TO_WIN;
 
     if (emberWins && tideWins) {
+      freezeMatchTimer();
       winner = "tie";
       started = false;
       stopLoops();
@@ -752,7 +811,7 @@
       statusText.textContent = message;
       battlefield.classList.add("game-over");
       updateTimerDisplay();
-      showGameOverScreen(message);
+      showGameOverScreen(message, formatMatchDurationLabel());
       return true;
     }
     if (emberWins) {
@@ -890,7 +949,7 @@
     return weapon.power * Math.pow(weapon.multiplier, Math.max(0, distance - 1));
   }
 
-  /** Ray attacks (Breach, Artillery) roll variance each volley; Strike does not. */
+  /** Ray attacks (Breach, Artillery, Saboteur) roll variance each volley; Strike does not. */
   function rayAttackVariance() {
     return 0.5 + Math.random() * 1.5;
   }
@@ -1051,7 +1110,7 @@
    * Stops on the first enemy unit in the ray.
    */
   function resolveDisruptShot(attackerTeam, weapon, hit) {
-    let power = attackPower(weapon, hit.distance);
+    let power = attackPower(weapon, hit.distance) * rayAttackVariance();
     if (power <= 0) return 0;
 
     const cell = hit.cell;
@@ -1276,7 +1335,7 @@
     timerRemainingMs = MATCH_DURATION_MS;
     inOvertime = false;
     btnPause.disabled = false;
-    statusText.textContent = "War started — take the enemy back row or hold the most units when time runs out";
+    statusText.textContent = "War started — only one will survive";
     startLoops();
   }
 
@@ -1295,6 +1354,7 @@
   btnPause.addEventListener("click", () => setPaused(!paused));
   btnReset.addEventListener("click", returnToStart);
   btnStart.addEventListener("click", beginMatch);
+  if (btnQuickStart) btnQuickStart.addEventListener("click", quickStartMatch);
   btnDismiss.addEventListener("click", dismissGameOver);
 
   if (inputBudget) {
