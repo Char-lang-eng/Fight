@@ -907,6 +907,19 @@ body {
   line-height: 1.45;
 }
 
+.overlay-duration {
+  margin: 0.75rem 0 1.1rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--paper);
+  font-variant-numeric: tabular-nums;
+}
+
+.overlay-duration.hidden {
+  display: none;
+}
+
 .name-fields {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -958,6 +971,22 @@ body {
   width: 100%;
   padding: 0.75rem 1rem;
   font-size: 0.85rem;
+}
+
+.start-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.65rem;
+}
+
+.start-actions .btn-ghost {
+  border-color: var(--line);
+}
+
+@media (max-width: 520px) {
+  .start-actions {
+    grid-template-columns: 1fr;
+  }
 }
 
 .btn:disabled {
