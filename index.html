@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FRONTLINE — Territory War</title>
+  <title>Two Sides</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -14,8 +14,8 @@
 
   <div id="start-screen" class="overlay">
     <div class="overlay-card overlay-card-start">
-      <p class="overlay-brand">FRONTLINE</p>
-      <p class="overlay-lead">Take the enemy back row to win</p>
+      <p class="overlay-brand">Two Sides</p>
+      <p class="overlay-lead">Only one will survive</p>
 
       <div class="name-fields">
         <label class="name-field name-ember">
@@ -53,7 +53,10 @@
         </section>
       </div>
 
-      <button type="button" id="btn-start" class="btn btn-start">Start war</button>
+      <div class="start-actions">
+        <button type="button" id="btn-quick-start" class="btn btn-ghost btn-start">Quick start</button>
+        <button type="button" id="btn-start" class="btn btn-start">Start war</button>
+      </div>
     </div>
   </div>
 
@@ -61,14 +64,15 @@
     <div class="overlay-card">
       <p class="overlay-brand">Game over</p>
       <p id="gameover-message" class="overlay-lead">Victory</p>
+      <p id="gameover-duration" class="overlay-duration hidden"></p>
       <button type="button" id="btn-dismiss" class="btn btn-start">Dismiss</button>
     </div>
   </div>
 
   <header class="topbar">
     <div class="brand">
-      <span class="brand-mark">FRONTLINE</span>
-      <span class="brand-sub">Can you survive the war?</span>
+      <span class="brand-mark">Two Sides</span>
+      <span class="brand-sub">only one will survive</span>
     </div>
     <div class="controls">
       <button type="button" id="btn-pause" class="btn" disabled>Pause</button>
@@ -79,7 +83,7 @@
   <main class="stage">
     <aside class="hud hud-ember">
       <p class="hud-team" id="ember-name-label">Ember</p>
-      <p class="hud-stat"><span id="ember-cells">0</span> cells</p>
+      <p class="hud-stat"><span id="ember-units">0</span> units</p>
       <p class="hud-loadout-title">Loadout</p>
       <ul class="hud-loadout" id="ember-hud-loadout"></ul>
     </aside>
@@ -87,15 +91,13 @@
     <section class="battlefield-wrap">
       <div class="battlefield" id="battlefield" role="img" aria-label="Territory war grid"></div>
       <div class="legend">
-        <span class="legend-item"><i class="swatch ember"></i> <span id="ember-goal-label">Ember wants right edge</span></span>
-        <span class="legend-item"><i class="swatch tide"></i> <span id="tide-goal-label">Tide wants left edge</span></span>
         <span class="legend-item" id="attack-turn-label">Attack turn: Ember</span>
       </div>
     </section>
 
     <aside class="hud hud-tide">
       <p class="hud-team" id="tide-name-label">Tide</p>
-      <p class="hud-stat"><span id="tide-cells">0</span> cells</p>
+      <p class="hud-stat"><span id="tide-units">0</span> units</p>
       <p class="hud-loadout-title">Loadout</p>
       <ul class="hud-loadout" id="tide-hud-loadout"></ul>
     </aside>
@@ -124,14 +126,14 @@
               <span class="unit-emoji" aria-hidden="true">🚀</span>
               <div>
                 <strong>Artillery</strong>
-                <p>Fires straight toward the enemy end only. Power 1-4, mult 0.8 — captures at most 1 tile per shot.</p>
+                <p>Fires straight toward the enemy end only. Power 0.5-2, mult 0.8 — captures at most 1 tile per shot.</p>
               </div>
             </li>
             <li>
               <span class="unit-emoji" aria-hidden="true">🎯</span>
               <div>
                 <strong>Saboteur</strong>
-                <p>Fires straight like Artillery, but skips empty land and only destroys enemy units — never captures. Power 5, mult 1. Unlocks after 10 minutes.</p>
+                <p>Fires straight like Artillery, but skips empty land and only destroys enemy units — never captures. Power 2.5-10, mult 1. Unlocks after 10 minutes.</p>
               </div>
             </li>
           </ul>
