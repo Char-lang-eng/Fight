@@ -1019,13 +1019,16 @@
     const targets = enemiesInRange(attackerTeam, fromR, fromC, range);
     if (!targets.length) return 0;
 
-    const targetCol = TEAMS[attackerTeam].targetBackC;
+    const homeCol = TEAMS[attackerTeam].startC;
 
-    // Prefer closer targets, then ones nearer the enemy back row
-    const minDist = Math.min(...targets.map((t) => t.distance));
-    let pool = targets.filter((t) => t.distance === minDist);
-    const bestBack = Math.min(...pool.map((t) => Math.abs(t.c - targetCol)));
-    pool = pool.filter((t) => Math.abs(t.c - targetCol) === bestBack);
+    // Prefer offensive > empty > defensive, then nearest own wall, then random
+    const offensive = targets.filter((t) => t.cell.weapon?.kind === "offensive");
+    const empty = targets.filter((t) => !t.cell.weapon);
+    const defensive = targets.filter((t) => t.cell.weapon?.kind === "defensive");
+    let pool = offensive.length ? offensive : empty.length ? empty : defensive.length ? defensive : targets;
+
+    const minWall = Math.min(...pool.map((t) => Math.abs(t.c - homeCol)));
+    pool = pool.filter((t) => Math.abs(t.c - homeCol) === minWall);
 
     const chosen = pick(pool);
     showAttackTracer(attackerTeam, fromR, fromC, chosen.r, chosen.c);
@@ -1177,8 +1180,13 @@
 
     const teamId = attackTurn;
     const attackers = [];
+    // Fire from each team's home edge toward the enemy so both sides get the same
+    // rear-then-front ordering (Ember L→R, Tide R→L).
+    const colStart = teamId === "ember" ? 0 : COLS - 1;
+    const colEnd = teamId === "ember" ? COLS : -1;
+    const colStep = teamId === "ember" ? 1 : -1;
     for (let r = 0; r < ROWS; r++) {
-      for (let c = 0; c < COLS; c++) {
+      for (let c = colStart; c !== colEnd; c += colStep) {
         const cell = cells[idx(r, c)];
         if (
           cell.weapon?.kind === "offensive" &&
