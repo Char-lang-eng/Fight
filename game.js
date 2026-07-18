@@ -40,7 +40,7 @@
       { id: "strike", label: "Strike", symbol: "🗡️", power: 4, multiplier: 1, method: "area", range: 2, cost: 2 },
       { id: "breach", label: "Breach", symbol: "💥", power: 6, multiplier: 0.45, method: "diagonal", cost: 6 },
       { id: "artillery", label: "Artillery", symbol: "🚀", power: 1, multiplier: 0.8, method: "forward", cost: 3 },
-      { id: "saboteur", label: "Saboteur", symbol: "🎯", power: 5, multiplier: 1, method: "disrupt", cost: 4 },
+      { id: "saboteur", label: "Saboteur", symbol: "🎯", power: 5, multiplier: 0.9, method: "disrupt", cost: 4 },
     ],
     defensive: [
       { id: "barricade", label: "Barricade", symbol: "🧱", armor: 10, cost: 1 },
