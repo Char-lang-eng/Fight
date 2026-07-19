@@ -8,7 +8,7 @@
   /** For this long after kickoff, cursors cannot overwrite occupied tiles */
   const NO_OVERWRITE_MS = 120_000;
   /** Match length; most units on the board wins when time runs out */
-  const MATCH_DURATION_MS = 2 * 60 * 1000;
+  const MATCH_DURATION_MS = 20 * 60 * 1000;
   /** Extra time when regulation ends without a 5-unit lead */
   const OVERTIME_DURATION_MS = 5 * 60 * 1000;
   /** Unit lead needed to win at the end of regulation (any lead wins after OT) */
