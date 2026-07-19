@@ -8,9 +8,11 @@
   /** For this long after kickoff, cursors cannot overwrite occupied tiles */
   const NO_OVERWRITE_MS = 120_000;
   /** Match length; most units on the board wins when time runs out */
-  const MATCH_DURATION_MS = 20 * 60 * 1000;
-  /** Extra time when regulation ends tied on units */
+  const MATCH_DURATION_MS = 2 * 60 * 1000;
+  /** Extra time when regulation ends without a 5-unit lead */
   const OVERTIME_DURATION_MS = 5 * 60 * 1000;
+  /** Unit lead needed to win at the end of regulation (any lead wins after OT) */
+  const REGULATION_CLEARANCE = 5;
   /** Saboteur cannot spawn until this much match time has elapsed */
   const SABOTEUR_UNLOCK_MS = 10 * 60 * 1000;
 
@@ -330,7 +332,9 @@
         hasBoosts = true;
 
         const li = document.createElement("li");
-        const locked = unit.id === "saboteur" ? " · after 10m" : "";
+        const locked = unit.id === "saboteur" && !isSaboteurUnlocked()
+          ? " · after 10m"
+          : "";
         li.innerHTML = `
           <span class="hud-loadout-symbol" aria-hidden="true">${unit.symbol}</span>
           <span>${unit.label}</span>
@@ -667,11 +671,52 @@
     timerRemainingMs = Math.max(0, matchEndsAt - Date.now());
   }
 
+  /**
+   * Frame split: top/bottom move across 25–75% unit share.
+   * Past that, the trailing team's back wall closes in from top & bottom.
+   */
+  function updateScoreBorder(units) {
+    let share = 0.5;
+    if (winner === "ember") {
+      share = 1;
+    } else if (winner === "tide") {
+      share = 0;
+    } else if (winner !== "tie") {
+      const total = units.ember + units.tide;
+      if (total > 0) share = units.ember / total;
+    }
+
+    let midSplit = 0.5;
+    let leftEat = 0;
+    let rightEat = 0;
+
+    if (share <= 0) {
+      midSplit = 0;
+      leftEat = 1;
+    } else if (share >= 1) {
+      midSplit = 1;
+      rightEat = 1;
+    } else if (share < 0.25) {
+      midSplit = 0;
+      leftEat = 1 - share / 0.25;
+    } else if (share > 0.75) {
+      midSplit = 1;
+      rightEat = (share - 0.75) / 0.25;
+    } else {
+      midSplit = (share - 0.25) / 0.5;
+    }
+
+    battlefield.style.setProperty("--mid-split", String(midSplit));
+    battlefield.style.setProperty("--left-eat", String(leftEat));
+    battlefield.style.setProperty("--right-eat", String(rightEat));
+  }
+
   function updateScores() {
     const units = countUnitsOnBoard();
     document.getElementById("ember-units").textContent = String(units.ember);
     document.getElementById("tide-units").textContent = String(units.tide);
     placementCountEl.textContent = `${placementCount} placement${placementCount === 1 ? "" : "s"}`;
+    updateScoreBorder(units);
   }
 
   /** One step of a full-grid snake scan (covers every square in order). */
@@ -727,6 +772,7 @@
     if (teamId === "ember" || teamId === "tide") {
       battlefield.classList.add(`winner-${teamId}`);
     }
+    updateScores();
     updateTimerDisplay();
     showGameOverScreen(message);
   }
@@ -743,6 +789,7 @@
     const message = `${TEAMS[teamId].name} holds the enemy back row (${held}) — victory!`;
     statusText.textContent = message;
     battlefield.classList.add("game-over", `winner-${teamId}`);
+    updateScores();
     updateTimerDisplay();
     showGameOverScreen(message, formatMatchDurationLabel());
   }
@@ -751,7 +798,10 @@
     inOvertime = true;
     timerRemainingMs = OVERTIME_DURATION_MS;
     matchEndsAt = Date.now() + OVERTIME_DURATION_MS;
-    statusText.textContent = `Overtime — tied at ${units.ember} units. Most units when OT ends wins!`;
+    const lead = Math.abs(units.ember - units.tide);
+    statusText.textContent = lead === 0
+      ? `Overtime — tied at ${units.ember} units. Most units when OT ends wins!`
+      : `Overtime — lead only ${lead} (need ${REGULATION_CLEARANCE}). Most units when OT ends wins!`;
     updateTimerDisplay();
   }
 
@@ -759,6 +809,14 @@
     if (winner || !started) return;
 
     const units = countUnitsOnBoard();
+    const lead = Math.abs(units.ember - units.tide);
+
+    // Regulation: need a clear lead, otherwise OT
+    if (!inOvertime && lead < REGULATION_CLEARANCE) {
+      startOvertime(units);
+      return;
+    }
+
     if (units.ember > units.tide) {
       endMatch(
         "time",
@@ -776,11 +834,6 @@
       return;
     }
 
-    if (!inOvertime) {
-      startOvertime(units);
-      return;
-    }
-
     endMatch(
       "time",
       "tie",
@@ -788,9 +841,19 @@
     );
   }
 
+  let saboteurHudUnlocked = false;
+
+  function syncSaboteurHud() {
+    const unlocked = isSaboteurUnlocked();
+    if (unlocked === saboteurHudUnlocked) return;
+    saboteurHudUnlocked = unlocked;
+    updateHudLoadouts();
+  }
+
   function tickMatchTimer() {
     if (!started || winner || paused) return;
     updateTimerDisplay();
+    syncSaboteurHud();
     if (Date.now() >= matchEndsAt) endMatchByTime();
   }
 
@@ -810,6 +873,7 @@
       const message = "Dead heat — both hold the enemy back row!";
       statusText.textContent = message;
       battlefield.classList.add("game-over");
+      updateScores();
       updateTimerDisplay();
       showGameOverScreen(message, formatMatchDurationLabel());
       return true;
@@ -1321,6 +1385,7 @@
     timerRemainingMs = MATCH_DURATION_MS;
     inOvertime = false;
     attackTurn = "ember";
+    saboteurHudUnlocked = false;
     btnPause.textContent = "Pause";
     btnPause.disabled = true;
     battlefield.classList.remove("game-over", "winner-ember", "winner-tide");
@@ -1328,6 +1393,7 @@
     updateScores();
     updateAttackTurnLabel();
     updateTimerDisplay();
+    updateHudLoadouts();
   }
 
   function beginMatch() {
