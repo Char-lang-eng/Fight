@@ -1244,13 +1244,13 @@
 
     const teamId = attackTurn;
     const attackers = [];
-    // Fire from each team's home edge toward the enemy so both sides get the same
-    // rear-then-front ordering (Ember L→R, Tide R→L).
+    // Fire column by column from each team's home edge toward the enemy, top to
+    // bottom within each column (Ember L→R, Tide R→L).
     const colStart = teamId === "ember" ? 0 : COLS - 1;
     const colEnd = teamId === "ember" ? COLS : -1;
     const colStep = teamId === "ember" ? 1 : -1;
-    for (let r = 0; r < ROWS; r++) {
-      for (let c = colStart; c !== colEnd; c += colStep) {
+    for (let c = colStart; c !== colEnd; c += colStep) {
+      for (let r = 0; r < ROWS; r++) {
         const cell = cells[idx(r, c)];
         if (
           cell.weapon?.kind === "offensive" &&
