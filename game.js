@@ -5,7 +5,7 @@
   const ATTACK_MS = 1800;
   /** How many cells of the enemy back row you need to own to win */
   const BACK_ROW_TO_WIN = 1;
-  /** For this long after kickoff, cursors cannot overwrite occupied tiles */
+  /** For this much match play time (excluding pauses), cursors cannot overwrite occupied tiles */
   const NO_OVERWRITE_MS = 120_000;
   /** Match length; most units on the board wins when time runs out */
   const MATCH_DURATION_MS = 20 * 60 * 1000;
@@ -894,8 +894,8 @@
     const cell = cells[idx(cursor.r, cursor.c)];
     if (cell.owner !== teamId) return null;
 
-    // First minute: cannot overwrite an existing unit
-    const inOpening = started && Date.now() - matchStartedAt < NO_OVERWRITE_MS;
+    // Opening window: cannot overwrite an existing unit (paused time excluded)
+    const inOpening = started && getMatchElapsedMs() < NO_OVERWRITE_MS;
     if (inOpening && cell.weapon) return null;
 
     const blueprint = pickWeightedUnit(teamId);
