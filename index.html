@@ -34,6 +34,11 @@
           <input id="input-budget" type="number" min="0" max="40" step="1" value="10" />
         </label>
         <p class="budget-hint">Each purchase costs points and adds +1% spawn chance for that unit.</p>
+        <label class="loadout-symmetry-toggle" for="input-symmetrical-loadouts">
+          <input id="input-symmetrical-loadouts" type="checkbox" />
+          <span>Symmetrical loadouts</span>
+        </label>
+        <p class="budget-hint loadout-symmetry-hint">When on, both teams share the same unit picks — edit either board.</p>
       </div>
 
       <div class="loadout-boards" id="loadout-boards">
@@ -133,7 +138,7 @@
               <span class="unit-emoji" aria-hidden="true">🎯</span>
               <div>
                 <strong>Saboteur</strong>
-                <p>Fires straight like Artillery, but skips empty land and only destroys enemy units — never captures. Power 2.5-10, mult 0.9. Unlocks after 10 minutes.</p>
+                <p>Fires straight like Artillery, but skips empty land and only damages enemy units — never captures. Prefers protected wards to drain Protectors. Power 2.5-10, mult 0.9. Unlocks after 10 minutes.</p>
               </div>
             </li>
           </ul>
@@ -160,6 +165,13 @@
               <div>
                 <strong>Fortify</strong>
                 <p>Heaviest wall. Armor 64 — the toughest hold on the board.</p>
+              </div>
+            </li>
+            <li>
+              <span class="unit-emoji" aria-hidden="true">🧿</span>
+              <div>
+                <strong>Protector</strong>
+                <p>Armor 250. On its team's attack turn, shields 8 random friendly tiles — those take no damage; the Protector absorbs it instead. Wards re-roll every 2 minutes. Max 1 per side.</p>
               </div>
             </li>
           </ul>
