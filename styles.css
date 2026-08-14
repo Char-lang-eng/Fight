@@ -352,6 +352,13 @@ body {
   background: linear-gradient(90deg, rgba(219, 234, 254, 0.15), rgba(96, 165, 250, 1));
 }
 
+.attack-tracer.protect {
+  color: rgba(250, 204, 21, 0.98);
+  background: linear-gradient(90deg, rgba(250, 204, 21, 0.15), rgba(250, 204, 21, 1));
+  height: 3px;
+  animation: tracer-shot 0.65s ease-out forwards;
+}
+
 .cell {
   position: relative;
   transition: background 0.35s ease, box-shadow 0.25s ease;
@@ -376,6 +383,14 @@ body {
 
 .cell.tide {
   background: rgba(29, 78, 216, 0.7);
+}
+
+.cell.ember.protected {
+  background: rgba(120, 18, 18, 0.92);
+}
+
+.cell.tide.protected {
+  background: rgba(12, 35, 110, 0.92);
 }
 
 .cell.cursor-ember {
@@ -450,6 +465,10 @@ body {
 
 .cell.under-fire {
   animation: under-fire 0.45s ease;
+}
+
+.weapon.protector {
+  filter: drop-shadow(0 0 4px rgba(250, 204, 21, 0.55));
 }
 
 @keyframes capture-flash {
@@ -776,6 +795,49 @@ body {
   font-size: 0.68rem;
   line-height: 1.4;
   color: var(--dust);
+}
+
+.loadout-symmetry-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.loadout-symmetry-toggle input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--paper);
+  cursor: pointer;
+}
+
+.loadout-symmetry-toggle span {
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--paper);
+}
+
+.loadout-symmetry-hint {
+  margin-top: 0.35rem;
+}
+
+.loadout-board-mirror {
+  position: relative;
+}
+
+.loadout-board-mirror::after {
+  content: "";
+  position: absolute;
+  top: 0.55rem;
+  right: 0.55rem;
+  font-size: 0.55rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dust);
+  pointer-events: none;
 }
 
 .loadout-boards {
