@@ -15,6 +15,8 @@
   const REGULATION_CLEARANCE = 5;
   /** Saboteur cannot spawn until this much match time has elapsed */
   const SABOTEUR_UNLOCK_MS = 10 * 60 * 1000;
+  /** Living Protectors re-roll their wards this often (match time, pauses excluded) */
+  const PROTECTOR_REROLL_MS = 120_000;
 
   const TEAMS = {
     ember: {
@@ -48,6 +50,13 @@
       { id: "barricade", label: "Barricade", symbol: "🧱", armor: 10, cost: 1 },
       { id: "bunker", label: "Bunker", symbol: "🛡️", armor: 32, cost: 2 },
       { id: "fortify", label: "Fortify", symbol: "🏰", armor: 64, cost: 5 },
+      { id: "protector",
+        label: "Protector",
+        symbol: "🧿",
+        armor: 250,
+        cost: 12,
+        protectCount: 8,
+      },
     ],
   };
 
@@ -95,11 +104,12 @@
   const tidePointsLeftEl = document.getElementById("tide-points-left");
   const loadoutEmberTitle = document.getElementById("loadout-ember-title");
   const loadoutTideTitle = document.getElementById("loadout-tide-title");
+  const inputSymmetricalLoadouts = document.getElementById("input-symmetrical-loadouts");
 
   battlefield.style.setProperty("--cols", COLS);
   battlefield.style.setProperty("--rows", ROWS);
 
-  /** @type {{ owner: string, weapon: object|null, armor: number, el: HTMLElement }[]} */
+  /** @type {{ owner: string, weapon: object|null, armor: number, protectedBy: number|null, el: HTMLElement }[]} */
   let cells = [];
 
   const cursors = {
@@ -121,6 +131,10 @@
   let timerInterval = null;
   let tracerLayer = null;
   let budgetPoints = DEFAULT_BUDGET;
+  /** How many times each team has placed a Protector this match (reduces spawn %). */
+  const protectorPlacements = { ember: 0, tide: 0 };
+  /** When true, Ember and Tide loadouts stay identical on the start screen. */
+  let symmetricalLoadouts = false;
   const loadouts = {
     ember: emptyLoadout(),
     tide: emptyLoadout(),
@@ -201,7 +215,18 @@
   /** Each purchase adds 1% spawn chance; locked Saboteur stays in the empty pool. */
   function activeSpawnChance(teamId, unitId) {
     if (unitId === "saboteur" && !isSaboteurUnlocked()) return 0;
-    return loadoutLevels(teamId, unitId);
+    // Only one Protector per side at a time
+    if (unitId === "protector" && teamHasProtector(teamId)) return 0;
+    return spawnChancePct(teamId, unitId);
+  }
+
+  function teamHasProtector(teamId) {
+    return cells.some(
+      (c) =>
+        c.owner === teamId &&
+        c.weapon?.id === "protector" &&
+        c.weapon.team === teamId,
+    );
   }
 
   function nothingChancePct(teamId) {
@@ -212,8 +237,13 @@
     return Math.max(0, 100 - active);
   }
 
+  /** Effective spawn % — Protector decays by 1% per placement this match. */
   function spawnChancePct(teamId, unitId) {
-    return loadoutLevels(teamId, unitId);
+    const bought = loadoutLevels(teamId, unitId);
+    if (unitId === "protector") {
+      return Math.max(0, bought - (protectorPlacements[teamId] || 0));
+    }
+    return bought;
   }
 
   /** Roll a unit from the loadout, or null when the "nothing" weight wins. */
@@ -231,6 +261,22 @@
     }
 
     return null;
+  }
+
+  function mirrorLoadouts(fromTeamId, toTeamId) {
+    for (const unit of UNIT_CATALOG) {
+      loadouts[toTeamId][unit.id] = loadouts[fromTeamId][unit.id] || 0;
+    }
+  }
+
+  function setSymmetricalLoadouts(next) {
+    symmetricalLoadouts = next;
+    if (inputSymmetricalLoadouts) inputSymmetricalLoadouts.checked = next;
+    if (symmetricalLoadouts) {
+      mirrorLoadouts("ember", "tide");
+      clampLoadoutsToBudget();
+    }
+    updateLoadoutUI();
   }
 
   function applyLoadoutPreset(preset) {
@@ -262,12 +308,26 @@
     const unit = unitById(unitId);
     if (!unit) return;
 
-    const current = loadouts[teamId][unitId] || 0;
-    if (delta > 0) {
-      if (pointsLeft(teamId) < unit.cost) return;
-      loadouts[teamId][unitId] = current + 1;
-    } else if (delta < 0 && current > 0) {
-      loadouts[teamId][unitId] = current - 1;
+    if (symmetricalLoadouts) {
+      const current = loadouts[teamId][unitId] || 0;
+      if (delta > 0) {
+        if (pointsLeft("ember") < unit.cost || pointsLeft("tide") < unit.cost) return;
+        const next = current + 1;
+        loadouts.ember[unitId] = next;
+        loadouts.tide[unitId] = next;
+      } else if (delta < 0 && current > 0) {
+        const next = current - 1;
+        loadouts.ember[unitId] = next;
+        loadouts.tide[unitId] = next;
+      }
+    } else {
+      const current = loadouts[teamId][unitId] || 0;
+      if (delta > 0) {
+        if (pointsLeft(teamId) < unit.cost) return;
+        loadouts[teamId][unitId] = current + 1;
+      } else if (delta < 0 && current > 0) {
+        loadouts[teamId][unitId] = current - 1;
+      }
     }
     updateLoadoutUI();
   }
@@ -285,9 +345,11 @@
 
         const kindLabel = unit.id === "saboteur"
           ? `Offensive · ${unit.cost} pts/+1% · after 10m`
-          : unit.kind === "offensive"
-            ? `Offensive · ${unit.cost} pts/+1%`
-            : `Defensive · ${unit.cost} pts/+1%`;
+          : unit.id === "protector"
+            ? `Defensive · ${unit.cost} pts/+1% · max 1`
+            : unit.kind === "offensive"
+              ? `Offensive · ${unit.cost} pts/+1%`
+              : `Defensive · ${unit.cost} pts/+1%`;
 
         row.innerHTML = `
           <div class="loadout-unit">
@@ -328,17 +390,23 @@
       let hasBoosts = false;
       for (const unit of UNIT_CATALOG) {
         const chance = spawnChancePct(teamId, unit.id);
-        if (chance <= 0) continue;
+        const protectorActive =
+          unit.id === "protector" && teamHasProtector(teamId);
+        // Keep Protector listed while one is on the board, even if spawn % is 0
+        if (chance <= 0 && !protectorActive) continue;
         hasBoosts = true;
 
         const li = document.createElement("li");
-        const locked = unit.id === "saboteur" && !isSaboteurUnlocked()
-          ? " · after 10m"
-          : "";
+        let chanceLabel = `${chance}%`;
+        if (unit.id === "saboteur" && !isSaboteurUnlocked()) {
+          chanceLabel = `${chance}% · after 10m`;
+        } else if (protectorActive) {
+          chanceLabel = "active";
+        }
         li.innerHTML = `
           <span class="hud-loadout-symbol" aria-hidden="true">${unit.symbol}</span>
           <span>${unit.label}</span>
-          <span class="hud-loadout-chance">${chance}%${locked}</span>
+          <span class="hud-loadout-chance">${chanceLabel}</span>
         `;
         list.appendChild(li);
       }
@@ -363,10 +431,18 @@
     if (loadoutEmberTitle) loadoutEmberTitle.textContent = TEAMS.ember.name;
     if (loadoutTideTitle) loadoutTideTitle.textContent = TEAMS.tide.name;
 
+    document.querySelector(".loadout-tide")?.classList.toggle(
+      "loadout-board-mirror",
+      symmetricalLoadouts,
+    );
+
     for (const teamId of ["ember", "tide"]) {
       const root = teamId === "ember" ? emberLoadoutEl : tideLoadoutEl;
       if (!root) continue;
       const left = pointsLeft(teamId);
+      const symLeft = symmetricalLoadouts
+        ? Math.min(pointsLeft("ember"), pointsLeft("tide"))
+        : left;
 
       for (const unit of UNIT_CATALOG) {
         const row = root.querySelector(`[data-unit="${unit.id}"]`);
@@ -377,7 +453,8 @@
         row.querySelector(".loadout-chance > i").style.width = `${chance}%`;
         row.querySelector(".loadout-chance").title = `${chance}% spawn chance`;
         row.querySelector('[data-action="dec"]').disabled = level <= 0;
-        row.querySelector('[data-action="inc"]').disabled = left < unit.cost;
+        row.querySelector('[data-action="inc"]').disabled =
+          symmetricalLoadouts ? symLeft < unit.cost : left < unit.cost;
       }
     }
 
@@ -497,7 +574,7 @@
         battlefield.appendChild(el);
 
         const owner = c < COLS / 2 ? "ember" : "tide";
-        cells.push({ owner, weapon: null, armor: 0, el });
+        cells.push({ owner, weapon: null, armor: 0, protectedBy: null, el });
         paintCell(cells[cells.length - 1]);
       }
     }
@@ -544,9 +621,94 @@
     setTimeout(() => tracer.remove(), 320);
   }
 
+  /** Gold ward-link arrows from a Protector to its defended tiles. */
+  function showProtectTracer(fromR, fromC, toR, toC) {
+    if (!tracerLayer) return;
+
+    const start = cellCenter(fromR, fromC);
+    const end = cellCenter(toR, toC);
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const length = Math.hypot(dx, dy);
+    if (length < 2) return;
+
+    const tracer = document.createElement("div");
+    tracer.className = "attack-tracer protect";
+    tracer.style.left = `${start.x}px`;
+    tracer.style.top = `${start.y}px`;
+    tracer.style.width = `${length}px`;
+    tracer.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
+    tracerLayer.appendChild(tracer);
+
+    setTimeout(() => tracer.remove(), 700);
+  }
+
+  function cellCoords(i) {
+    return { r: Math.floor(i / COLS), c: i % COLS };
+  }
+
+  /**
+   * On a team's attack turn: first-time ward assign, or timed re-roll if due.
+   * Gold arrows fire whenever wards are (re)assigned.
+   */
+  function revealPendingProtectors(teamId) {
+    const elapsed = getMatchElapsedMs();
+    for (let i = 0; i < cells.length; i++) {
+      const cell = cells[i];
+      if (cell.owner !== teamId || cell.weapon?.id !== "protector") continue;
+
+      const firstAssign = !!cell.weapon.pendingReveal;
+      const rerollDue =
+        !!cell.weapon.pendingReroll ||
+        (cell.weapon.nextRerollAt != null && elapsed >= cell.weapon.nextRerollAt);
+
+      if (!firstAssign && !rerollDue) continue;
+
+      rerollProtectorWards(i);
+      cell.weapon.pendingReveal = false;
+    }
+  }
+
+  /** Flag living Protectors whose 2m ward timer has elapsed (applied on next attack turn). */
+  function refreshProtectorWards() {
+    const elapsed = getMatchElapsedMs();
+    for (const cell of cells) {
+      if (cell.weapon?.id !== "protector") continue;
+      if (cell.weapon.pendingReveal) continue;
+      if (cell.weapon.nextRerollAt == null) continue;
+      if (elapsed < cell.weapon.nextRerollAt) continue;
+      cell.weapon.pendingReroll = true;
+    }
+  }
+
+  function showProtectorWardArrows(protectorIdx) {
+    const cell = cells[protectorIdx];
+    if (!cell?.weapon || cell.weapon.id !== "protector") return;
+    const from = cellCoords(protectorIdx);
+    for (const wardIdx of cell.weapon.protected || []) {
+      const ward = cells[wardIdx];
+      if (!ward || ward.protectedBy !== protectorIdx) continue;
+      const to = cellCoords(wardIdx);
+      showProtectTracer(from.r, from.c, to.r, to.c);
+    }
+  }
+
+  /** Re-assign wards and refresh the 2m re-roll clock. */
+  function rerollProtectorWards(protectorIdx) {
+    const cell = cells[protectorIdx];
+    if (!cell?.weapon || cell.weapon.id !== "protector") return;
+
+    assignProtections(protectorIdx, cell.owner);
+    cell.weapon.nextRerollAt = getMatchElapsedMs() + PROTECTOR_REROLL_MS;
+    cell.weapon.pendingReroll = false;
+    paintCell(cell);
+    showProtectorWardArrows(protectorIdx);
+  }
+
   function paintCell(cell) {
     cell.el.classList.remove("ember", "tide");
     cell.el.classList.add(cell.owner);
+    cell.el.classList.toggle("protected", isProtectedWard(cell));
 
     cell.el.querySelector(".armor-bar")?.remove();
     const existing = cell.el.querySelector(".weapon");
@@ -555,17 +717,175 @@
     if (cell.weapon) {
       const w = document.createElement("span");
       w.className = `weapon ${cell.weapon.kind}`;
+      if (cell.weapon.id === "protector") w.classList.add("protector");
       w.textContent = cell.weapon.symbol;
       if (cell.weapon.kind === "defensive") {
         const maxArmor = cell.weapon.armor;
-        w.title = `${cell.weapon.label} · armor ${Math.ceil(cell.armor)} / ${maxArmor}`;
+        const wards =
+          cell.weapon.id === "protector" &&
+          Array.isArray(cell.weapon.protected) &&
+          cell.weapon.protected.length
+            ? ` · wards ${cell.weapon.protected.length}`
+            : cell.weapon.id === "protector" && cell.weapon.pendingReveal
+              ? " · choosing wards next attack"
+              : "";
+        w.title = `${cell.weapon.label} · armor ${Math.ceil(cell.armor)} / ${maxArmor}${wards}`;
       } else {
         w.title = `${cell.weapon.label} · power ${cell.weapon.power} · mult ${cell.weapon.multiplier}`;
       }
       cell.el.appendChild(w);
+    } else {
+      cell.el.removeAttribute("title");
     }
 
     updateArmorBar(cell);
+  }
+
+  /** True when this cell is currently shielded by a living same-team Protector. */
+  function isProtectedWard(cell) {
+    return livingProtectorFor(cell) != null;
+  }
+
+  /** Living Protector linked to this ward cell, or null. */
+  function livingProtectorFor(cell) {
+    if (cell.protectedBy == null) return null;
+    const protector = cells[cell.protectedBy];
+    if (!protector || protector === cell) return null;
+    if (protector.weapon?.id !== "protector") return null;
+    if (protector.armor <= 0) return null;
+    if (protector.owner !== cell.owner) return null;
+    return protector;
+  }
+
+  /** Drop ward links when a Protector leaves the board. */
+  function releaseProtections(protectorCell) {
+    const list = protectorCell.weapon?.protected;
+    if (!Array.isArray(list)) return;
+    const protectorIdx = cells.indexOf(protectorCell);
+    for (const i of list) {
+      const ward = cells[i];
+      if (ward && ward.protectedBy === protectorIdx) {
+        ward.protectedBy = null;
+        paintCell(ward);
+      }
+    }
+    protectorCell.weapon.protected = [];
+  }
+
+  /** Remove this cell from its Protector's ward list. */
+  function unlinkProtected(cell) {
+    if (cell.protectedBy == null) return;
+    const protector = cells[cell.protectedBy];
+    if (protector?.weapon?.id === "protector" && Array.isArray(protector.weapon.protected)) {
+      protector.weapon.protected = protector.weapon.protected.filter(
+        (i) => cells[i] !== cell,
+      );
+    }
+    cell.protectedBy = null;
+  }
+
+  /** Clear a unit from a cell (handles Protector cleanup). */
+  function clearWeapon(cell) {
+    const wasProtector = cell.weapon?.id === "protector";
+    if (wasProtector) releaseProtections(cell);
+    cell.weapon = null;
+    cell.armor = 0;
+    paintCell(cell);
+    if (wasProtector) updateHudLoadouts();
+  }
+
+  /** Flip ownership to attacker; clears units and protection links. */
+  function captureCell(cell, newOwner) {
+    const wasProtector = cell.weapon?.id === "protector";
+    if (wasProtector) releaseProtections(cell);
+    unlinkProtected(cell);
+    cell.owner = newOwner;
+    cell.weapon = null;
+    cell.armor = 0;
+    paintCell(cell);
+    if (wasProtector) updateHudLoadouts();
+  }
+
+  /**
+   * Pick up to protectCount random same-colour tiles (excluding the Protector)
+   * and link them as wards. Clears any previous wards first.
+   */
+  function assignProtections(protectorIdx, teamId) {
+    const protectorCell = cells[protectorIdx];
+    releaseProtections(protectorCell);
+
+    const count = protectorCell.weapon.protectCount || 5;
+    const candidates = [];
+    for (let i = 0; i < cells.length; i++) {
+      if (i === protectorIdx) continue;
+      if (cells[i].owner !== teamId) continue;
+      candidates.push(i);
+    }
+
+    for (let i = candidates.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+    }
+
+    const chosen = candidates.slice(0, Math.min(count, candidates.length));
+    protectorCell.weapon.protected = chosen;
+    for (const i of chosen) {
+      unlinkProtected(cells[i]);
+      cells[i].protectedBy = protectorIdx;
+      paintCell(cells[i]);
+    }
+  }
+
+  /**
+   * Spend attack power against a defensive unit's armour.
+   * Returns remaining power after absorption. Clears the unit if armour hits 0.
+   */
+  function damageArmor(armorCell, power) {
+    if (
+      !armorCell.weapon ||
+      armorCell.weapon.kind !== "defensive" ||
+      armorCell.armor <= 0
+    ) {
+      return power;
+    }
+
+    const blocked = Math.min(power, armorCell.armor);
+    armorCell.armor -= blocked;
+    power -= blocked;
+
+    const wEl = armorCell.el.querySelector(".weapon");
+    if (wEl) {
+      wEl.classList.add("hit");
+      setTimeout(() => wEl.classList.remove("hit"), 450);
+    }
+
+    if (armorCell.armor > 0) {
+      updateArmorBar(armorCell);
+    } else {
+      clearWeapon(armorCell);
+    }
+    return power;
+  }
+
+  /**
+   * Apply defences for an attacked cell. Warded tiles redirect damage to their
+   * Protector; if the Protector falls, leftover power continues on this cell.
+   * Returns remaining power (0 = attack fully stopped).
+   */
+  function applyDefenses(cell, power) {
+    const protector = livingProtectorFor(cell);
+    if (protector) {
+      power = damageArmor(protector, power);
+      if (protector.weapon?.id === "protector" && protector.armor > 0) {
+        return 0;
+      }
+    }
+
+    if (cell.weapon?.kind === "defensive" && cell.armor > 0) {
+      power = damageArmor(cell, power);
+      if (cell.armor > 0) return 0;
+    }
+    return power;
   }
 
   function updateArmorBar(cell) {
@@ -854,6 +1174,7 @@
     if (!started || winner || paused) return;
     updateTimerDisplay();
     syncSaboteurHud();
+    refreshProtectorWards();
     if (Date.now() >= matchEndsAt) endMatchByTime();
   }
 
@@ -891,8 +1212,12 @@
 
   function tryPlace(teamId) {
     const cursor = cursors[teamId];
-    const cell = cells[idx(cursor.r, cursor.c)];
+    const cellIdx = idx(cursor.r, cursor.c);
+    const cell = cells[cellIdx];
     if (cell.owner !== teamId) return null;
+
+    // Protectors cannot be overwritten by the cursor
+    if (cell.weapon?.id === "protector") return null;
 
     // Opening window: cannot overwrite an existing unit (paused time excluded)
     const inOpening = started && getMatchElapsedMs() < NO_OVERWRITE_MS;
@@ -900,15 +1225,23 @@
 
     const blueprint = pickWeightedUnit(teamId);
     if (!blueprint) return null;
+    // Hard cap: never place a second Protector while one is alive
+    if (blueprint.id === "protector" && teamHasProtector(teamId)) return null;
 
     const kind = blueprint.kind;
     cell.weapon = { ...blueprint, kind, team: teamId };
     cell.armor = kind === "defensive" ? blueprint.armor : 0;
+    if (blueprint.id === "protector") {
+      cell.weapon.protected = [];
+      cell.weapon.pendingReveal = true;
+      protectorPlacements[teamId] = (protectorPlacements[teamId] || 0) + 1;
+    }
     paintCell(cell);
     cell.el.classList.add("flash-capture");
     setTimeout(() => cell.el.classList.remove("flash-capture"), 550);
 
     placementCount += 1;
+    if (blueprint.id === "protector") updateHudLoadouts();
     return blueprint.label;
   }
 
@@ -981,7 +1314,7 @@
     return hits;
   }
 
-  /** Saboteur flies over empty land and only stops on the first enemy unit. */
+  /** Saboteur flies over empty land; stops on the first enemy unit or protected ward. */
   function traceDisruptPaths(teamId, startR, startC, weapon) {
     const hits = [];
 
@@ -998,7 +1331,7 @@
 
         const cell = cells[idx(r, c)];
         if (cell.owner === teamId) continue;
-        if (!cell.weapon) continue;
+        if (!cell.weapon && !isProtectedWard(cell)) continue;
 
         hits.push({ cell, r, c, distance, dr, dc });
         break;
@@ -1026,32 +1359,11 @@
     cell.el.classList.add("under-fire");
     setTimeout(() => cell.el.classList.remove("under-fire"), 450);
 
-    if (cell.weapon?.kind === "defensive" && cell.armor > 0) {
-      const blocked = Math.min(power, cell.armor);
-      cell.armor -= blocked;
-      power -= blocked;
-
-      const wEl = cell.el.querySelector(".weapon");
-      if (wEl) {
-        wEl.classList.add("hit");
-        setTimeout(() => wEl.classList.remove("hit"), 450);
-      }
-
-      if (cell.armor > 0) {
-        updateArmorBar(cell);
-        return false;
-      }
-
-      cell.weapon = null;
-      cell.armor = 0;
-      paintCell(cell);
-    }
+    power = applyDefenses(cell, power);
+    if (power <= 0) return false;
 
     power -= 1;
-    cell.owner = attackerTeam;
-    cell.weapon = null;
-    cell.armor = 0;
-    paintCell(cell);
+    captureCell(cell, attackerTeam);
     cell.el.classList.add("flash-capture");
     setTimeout(() => cell.el.classList.remove("flash-capture"), 550);
     return true;
@@ -1085,10 +1397,15 @@
 
     const homeCol = TEAMS[attackerTeam].startC;
 
-    // Prefer offensive > empty > defensive, then nearest own wall, then random
-    const offensive = targets.filter((t) => t.cell.weapon?.kind === "offensive");
-    const empty = targets.filter((t) => !t.cell.weapon);
-    const defensive = targets.filter((t) => t.cell.weapon?.kind === "defensive");
+    // Prefer offensive > empty > defensive, then nearest own wall, then random.
+    // Protected wards count as defensive so Strike avoids them when better targets exist.
+    const isDefensiveTarget = (t) =>
+      t.cell.weapon?.kind === "defensive" || isProtectedWard(t.cell);
+    const offensive = targets.filter(
+      (t) => t.cell.weapon?.kind === "offensive" && !isProtectedWard(t.cell),
+    );
+    const empty = targets.filter((t) => !t.cell.weapon && !isProtectedWard(t.cell));
+    const defensive = targets.filter(isDefensiveTarget);
     let pool = offensive.length ? offensive : empty.length ? empty : defensive.length ? defensive : targets;
 
     const minWall = Math.min(...pool.map((t) => Math.abs(t.c - homeCol)));
@@ -1123,35 +1440,14 @@
       cell.el.classList.add("under-fire");
       setTimeout(() => cell.el.classList.remove("under-fire"), 450);
 
-      if (cell.weapon?.kind === "defensive" && cell.armor > 0) {
-        const blocked = Math.min(power, cell.armor);
-        cell.armor -= blocked;
-        power -= blocked;
-
-        const wEl = cell.el.querySelector(".weapon");
-        if (wEl) {
-          wEl.classList.add("hit");
-          setTimeout(() => wEl.classList.remove("hit"), 450);
-        }
-
-        if (cell.armor > 0) {
-          updateArmorBar(cell);
-          break;
-        }
-
-        cell.weapon = null;
-        cell.armor = 0;
-        paintCell(cell);
-      }
+      power = applyDefenses(cell, power);
+      if (power <= 0) break;
 
       // Breach needs at least 1 power to take a square; Artillery can capture with fractional power
       if (weapon.method === "diagonal" && power < 1) break;
 
       power -= 1;
-      cell.owner = attackerTeam;
-      cell.weapon = null;
-      cell.armor = 0;
-      paintCell(cell);
+      captureCell(cell, attackerTeam);
       cell.el.classList.add("flash-capture");
       setTimeout(() => cell.el.classList.remove("flash-capture"), 550);
       captures += 1;
@@ -1173,46 +1469,32 @@
   }
 
   /**
-   * Saboteur — damage units only, never capture territory.
-   * Stops on the first enemy unit in the ray.
+   * Saboteur — damage units / wards only, never capture territory.
+   * Stops on the first enemy unit or protected square in the ray.
    */
   function resolveDisruptShot(attackerTeam, weapon, hit) {
     let power = attackPower(weapon, hit.distance) * rayAttackVariance();
     if (power <= 0) return 0;
 
     const cell = hit.cell;
-    if (cell.owner === attackerTeam || !cell.weapon) return 0;
+    if (cell.owner === attackerTeam) return 0;
+    if (!cell.weapon && !isProtectedWard(cell)) return 0;
 
     cell.el.classList.add("under-fire");
     setTimeout(() => cell.el.classList.remove("under-fire"), 450);
 
-    if (cell.weapon.kind === "defensive" && cell.armor > 0) {
-      const blocked = Math.min(power, cell.armor);
-      cell.armor -= blocked;
-      power -= blocked;
+    const hadWeapon = !!cell.weapon;
+    power = applyDefenses(cell, power);
 
-      const wEl = cell.el.querySelector(".weapon");
-      if (wEl) {
-        wEl.classList.add("hit");
-        setTimeout(() => wEl.classList.remove("hit"), 450);
-      }
-
-      if (cell.armor > 0) {
-        updateArmorBar(cell);
-        return 0;
-      }
-
-      cell.weapon = null;
-      cell.armor = 0;
-      paintCell(cell);
+    // Leftover power destroys whatever unit remains (offensive, or a ward whose Protector fell)
+    if (cell.weapon && power > 0) {
+      clearWeapon(cell);
       return 1;
     }
 
-    // Offensive units are destroyed outright; ownership stays with the enemy
-    cell.weapon = null;
-    cell.armor = 0;
-    paintCell(cell);
-    return 1;
+    // Defensive unit (or Protector) was broken by armour absorption
+    if (hadWeapon && !cell.weapon) return 1;
+    return 0;
   }
 
   function pickAttackTarget(teamId, hits, weapon) {
@@ -1220,8 +1502,24 @@
 
     const targetCol = TEAMS[teamId].targetBackC;
 
-    // Artillery / Saboteur: prioritise the enemy back row when any ray can reach it
-    if (weapon.method === "forward" || weapon.method === "disrupt") {
+    // Saboteur: prefer protected wards (to drain Protectors), then back-row / closest
+    if (weapon.method === "disrupt") {
+      const protectedHits = hits.filter((h) => isProtectedWard(h.cell));
+      const pool = protectedHits.length ? protectedHits : hits;
+
+      const onBack = pool.filter((h) => h.c === targetCol);
+      if (onBack.length) {
+        const minDist = Math.min(...onBack.map((h) => h.distance));
+        return pick(onBack.filter((h) => h.distance === minDist));
+      }
+      const best = Math.min(...pool.map((h) => Math.abs(h.c - targetCol)));
+      const closest = pool.filter((h) => Math.abs(h.c - targetCol) === best);
+      const minDist = Math.min(...closest.map((h) => h.distance));
+      return pick(closest.filter((h) => h.distance === minDist));
+    }
+
+    // Artillery: prioritise the enemy back row when any ray can reach it
+    if (weapon.method === "forward") {
       const onBack = hits.filter((h) => h.c === targetCol);
       if (onBack.length) {
         const minDist = Math.min(...onBack.map((h) => h.distance));
@@ -1243,6 +1541,8 @@
     if (paused || winner) return;
 
     const teamId = attackTurn;
+    revealPendingProtectors(teamId);
+
     const attackers = [];
     // Fire column by column from each team's home edge toward the enemy, top to
     // bottom within each column (Ember L→R, Tide R→L).
@@ -1386,6 +1686,8 @@
     inOvertime = false;
     attackTurn = "ember";
     saboteurHudUnlocked = false;
+    protectorPlacements.ember = 0;
+    protectorPlacements.tide = 0;
     btnPause.textContent = "Pause";
     btnPause.disabled = true;
     battlefield.classList.remove("game-over", "winner-ember", "winner-tide");
@@ -1434,6 +1736,12 @@
   if (inputBudget) {
     inputBudget.addEventListener("change", () => setBudget(inputBudget.value));
     inputBudget.addEventListener("input", () => setBudget(inputBudget.value));
+  }
+
+  if (inputSymmetricalLoadouts) {
+    inputSymmetricalLoadouts.addEventListener("change", () => {
+      setSymmetricalLoadouts(inputSymmetricalLoadouts.checked);
+    });
   }
 
   [inputEmberName, inputTideName].forEach((input) => {
